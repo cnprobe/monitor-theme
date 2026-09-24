@@ -67,6 +67,14 @@ test('invalid config fields fail with the field path', () => {
     () => normalizeConfig({ maxHandshakesPerMinute: 1 }, 'config.json'),
     /config\.json\.maxHandshakesPerMinute/
   );
+  assert.throws(
+    () => normalizeConfig({ trustedProxyCidrs: ['not-a-cidr'] }, 'config.json'),
+    /config\.json\.trustedProxyCidrs/
+  );
+  assert.throws(
+    () => normalizeConfig({ trustedProxyCidrs: ['2001:db8::/32'] }, 'config.json'),
+    /config\.json\.trustedProxyCidrs/
+  );
 });
 
 test('missing config uses localhost-only development defaults', () => {

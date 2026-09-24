@@ -1,18 +1,6 @@
 {
   "port": 3777,
-  "trustCloudflareIp": false,
-  "exposeVisitorGeo": false,
-  "trustedProxyCidrs": [],
   "allowedOrigins": [
-    "http://localhost:3777",
-    "http://127.0.0.1:3777",
-    "http://[::1]:3777",
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-    "http://[::1]:4173",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://[::1]:8080",
     "https://monitor.example.com"
   ],
   "geese": 2,
@@ -20,19 +8,20 @@
   "maxProbeChicks": 200,
   "maxNpcEntities": 500,
   "maxHandshakesPerMinute": 60,
+  "exposeVisitorGeo": false,
   "geo": {
-    "externalLookup": false,
-    "providers": ["ipwho.is", "ipapi.co"]
+    "externalLookup": false
   },
   "probe": {
     "interval": 15000,
-    "sources": [],
-    "sites": [],
-    "security": {
-      "allowRemoteApiBase": false,
-      "allowNodegetBackends": false,
-      "apiBaseOrigins": [],
-      "nodegetBackendOrigins": []
-    }
+    "sources": [
+      {
+        "name": "我的 Komari",
+        "url": "https://monitor.example.com",
+        "kind": "komari",
+        "timeout": 12000
+      }
+    ],
+    "sites": []
   }
 }

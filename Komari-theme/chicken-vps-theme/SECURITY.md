@@ -20,6 +20,8 @@ WebSocket 的 Origin 白名单是跨站保护，不是身份认证。伴生服�
 
 `probe.security.allowRemoteApiBase` 和 `allowNodegetBackends` 默认关闭。开启时还必须列出明确的 `apiBaseOrigins` / `nodegetBackendOrigins`；跨源 API 跟随不会携带 Token 或自定义请求头，且跨源重定向会被拒绝。直接配置的源 URL 仍属于管理员信任边界，生产环境应配合出站防火墙阻止回环、RFC1918、链路本地和云元数据地址。
 
+访客 IP 和握手限流共用同一套反向代理信任规则：只有直接 peer 命中 `trustedProxyCidrs` 时才读取转发头；`CF-Connecting-IP` 需要 `trustCloudflareIp`，`X-Forwarded-For` 需要 `TRUST_PROXY=1`。Docker 中宿主机 Nginx 看到的 peer 可能是 Docker 网关而不是 `127.0.0.1`。`trustedProxyCidrs` 支持 IPv4 CIDR，IPv6 当前使用精确地址；格式错误会使服务启动失败。
+
 ## 资源限制
 
 伴生服务限制 WebSocket 帧、输入消息/字节率、连接数、玩家/NPC 数量和上游响应大小；主题也限制 bridge 消息、名单、快照和障碍物数组。不要为了“显示更多”而盲目提高这些上限。

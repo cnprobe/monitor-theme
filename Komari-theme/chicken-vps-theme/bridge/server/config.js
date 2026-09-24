@@ -9,6 +9,7 @@ import {
   defaultAllowedOrigins,
   normalizeAllowedOrigins,
   resolveProbeSecurity,
+  validateTrustedProxyCidrs,
 } from './security.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -259,8 +260,10 @@ export function normalizeConfig(raw, sourcePath = 'config.json') {
   if (has(raw, 'trustCloudflareIp')) boolField(raw.trustCloudflareIp, `${sourcePath}.trustCloudflareIp`);
   if (has(raw, 'exposeVisitorGeo')) boolField(raw.exposeVisitorGeo, `${sourcePath}.exposeVisitorGeo`);
   if (has(raw, 'trustedProxyCidrs')) {
-    if (!Array.isArray(raw.trustedProxyCidrs) || raw.trustedProxyCidrs.some(value => typeof value !== 'string')) {
-      fail(`${sourcePath}.trustedProxyCidrs`, 'must be an array of CIDR strings');
+    try {
+      validateTrustedProxyCidrs(raw.trustedProxyCidrs);
+    } catch (e) {
+      fail(`${sourcePath}.trustedProxyCidrs`, e.message.replace(/^trustedProxyCidrs\s*/, ''));
     }
   }
   if (has(raw, 'geese')) numberField(raw.geese, `${sourcePath}.geese`, { min: 0, max: 100, integer: true });
@@ -366,5 +369,6 @@ export {
   normalizeAllowedOrigins,
   requireOrigin,
   resolveProbeSecurity,
+  validateTrustedProxyCidrs,
 } from './security.js';
 export const ROOT_DIR = ROOT;

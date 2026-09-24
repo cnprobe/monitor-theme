@@ -1,11 +1,10 @@
 // 伴生服务 HTTP 健康检查 + WebSocket 入口。主题静态文件由 Komari 提供。
 
 import http from 'node:http';
-import net from 'node:net';
 import { WebSocketServer } from 'ws';
 import { Game } from './game.js';
 import cfg from './config.js';
-import { isOriginAllowed, isTrustedProxy } from './security.js';
+import { isOriginAllowed, resolveClientIp } from './security.js';
 
 const portValue = process.env.PORT !== undefined && process.env.PORT !== ''
   ? process.env.PORT : (cfg.port ?? 3777);
@@ -32,14 +31,11 @@ function allowHandshake(ip, limit = 60) {
 }
 
 function rateLimitKey(req) {
-  let peer = req?.socket?.remoteAddress || 'unknown';
-  if (peer.startsWith('::ffff:')) peer = peer.slice(7);
-  if (isTrustedProxy(peer, cfg.trustedProxyCidrs)) {
-    const forwarded = req.headers?.['cf-connecting-ip'] || req.headers?.['x-forwarded-for']?.split(',')[0];
-    const value = String(forwarded || '').trim();
-    if (value && net.isIP(value.replace(/^::ffff:/i, ''))) return value;
-  }
-  return peer;
+  return resolveClientIp(req?.socket?.remoteAddress, req?.headers, {
+    trustCloudflareIp: cfg.trustCloudflareIp,
+    trustProxy: process.env.TRUST_PROXY === '1',
+    trustedProxyCidrs: cfg.trustedProxyCidrs,
+  });
 }
 
 const server = http.createServer((req, res) => {

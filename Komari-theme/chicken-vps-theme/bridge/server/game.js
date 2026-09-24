@@ -8,7 +8,7 @@ import {
   ST_DEAD, ST_PECK, ST_AIR, ST_WALK, ST_RUN, ST_FLAP
 } from '../shared/physics.js';
 import { lookup } from './geo.js';
-import { isTrustedProxy } from './security.js';
+import { resolveClientIp } from './security.js';
 import { Probe } from './probe.js';
 import cfg from './config.js';
 
@@ -76,19 +76,11 @@ function chickScale(stats) {
 }
 
 function extractIp(req, trustCf, trustedProxyCidrs = []) {
-  let peer = (req.socket && req.socket.remoteAddress) || 'unknown';
-  if (peer.startsWith('::ffff:')) peer = peer.slice(7);
-  const peerIsTrustedProxy = isTrustedProxy(peer, trustedProxyCidrs);
-  // 只有直连 peer 命中明确配置的代理 CIDR 时才信任转发头，避免任意访客伪造 IP。
-  if (trustCf && peerIsTrustedProxy) {
-    const cf = req.headers['cf-connecting-ip'];
-    if (cf) return String(cf).trim();
-  }
-  if (process.env.TRUST_PROXY === '1' && peerIsTrustedProxy) {
-    const xf = req.headers['x-forwarded-for'];
-    if (xf) return String(xf).split(',')[0].trim();
-  }
-  return peer;
+  return resolveClientIp(req.socket?.remoteAddress, req.headers, {
+    trustCloudflareIp: trustCf,
+    trustProxy: process.env.TRUST_PROXY === '1',
+    trustedProxyCidrs,
+  });
 }
 
 export class Game {

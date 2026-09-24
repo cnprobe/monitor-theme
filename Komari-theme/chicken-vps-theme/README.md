@@ -1,163 +1,535 @@
-# Komari 养鸡场主题模板
+# Komari 养鸡场主题 + Bridge 伴生服务
 
-把监控节点变成 3D 小鸡：在线节点在农场里活动，CPU 越高体型越大；离线节点会倒地；访客可以移动、扇翅和互啄。
+> 这份 README 按“只使用 Komari”编写。除了 Komari 之外的其他适配器不需要配置，代码中保留的兼容能力可以直接忽略。
 
-本目录把下载的 Chicken VPS 项目拆成两部分：
+## 你需要部署两个东西
 
 ```text
-Komari Monitor
-└─ dist/                         # 安装到 Komari 的静态主题
-   ├─ index.html
-   ├─ style.css
-   ├─ js/                        # Three.js 客户端
-   ├─ shared/physics.js
-   └─ vendor/three.module.js
-
-伴生服务                       # 独立 Node.js 进程
-└─ bridge/
-   ├─ server/                   # 权威游戏循环、探针轮询、WebSocket
-   ├─ shared/physics.js
-   └─ config.json               # 仅服务端可见，勿提交
+主题 ZIP       → 上传到 Komari 后台，只提供 3D 页面和前端代码
+Bridge 镜像    → 在服务器上运行，提供权威游戏状态、Komari 数据轮询和 WebSocket
 ```
 
-## 为什么需要伴生服务
+只安装 ZIP 不会启动 Bridge，也不会产生多人互啄服务。只使用 Komari 时，服务器不需要 Node.js，不需要 `npm install`，也不需要 `.env`；唯一必须准备的服务端文件是：
 
-Komari 主题 ZIP 只能包含 `komari-theme.json` 和 `dist/` 静态资源，不能注册新的服务端路由或 WebSocket endpoint。主题负责画面、输入和 HUD；伴生服务负责以下权威状态：
+```text
+bridge/config.json
+```
 
-- 玩家移动、碰撞、血量、攻击冷却和互啄结果；
-- 访客断线重连与短期战绩；
-- ServerStatus、哪吒 V1、Komari 等探针的服务端轮询；
-- 探针凭据和私有源配置。
+---
 
-因此，**只安装主题 ZIP 不会自动获得多人互啄**。需要同时部署 `bridge/`。
+## 最短部署流程
 
-## 功能
+```text
+1. 复制并编辑 bridge/config.json
+2. docker pull ghcr.io/cnprobe/chicken-vps-bridge:latest
+3. 启动 Bridge 容器
+4. 用 Nginx/Caddy 把 Bridge 的 /ws 反向代理成 wss://
+5. 构建或获取主题 ZIP
+6. 在 Komari 上传 ZIP，并填写 wss://.../ws
+```
 
-- Three.js 低多边形鸡场和程序化鸡模型；
-- Komari 节点状态映射：在线、离线、CPU、内存、磁盘、流量、运行时间；
-- CPU 超过阈值时探针鸡更活跃，体型随负载变化；
-- 访客权威移动、 peck、扇翅、血量和排行榜；
-- 桌面键鼠、Pointer Lock、触屏摇杆和动作按钮；
-- 多探针源并行轮询与逐源错误提示；
-- Komari 主题托管设置与深浅色环境适配；
-- 没有伴生服务时进入本地模式，仍可浏览鸡场和本地移动。
+本文默认目录是：
 
-## 支持的探针
+```text
+Komari-theme/chicken-vps-theme/
+```
 
-伴生服务保留原项目的统一节点模型和自动识别流程：
-
-| `kind` | 面板/协议 | 主要接口 |
-| --- | --- | --- |
-| `serverstatus` | ServerStatus | `/json/stats.json` |
-| `nezha` | 哪吒 V1 | `/api/v1/service`、V1 列表或 WebSocket |
-| `komari` | Komari | `/api/nodes`、`/api/rpc2` |
-| `minimal` | 极简探针 | `/api/nodes` |
-| `nodeget` | NodeGet | `/config.json` + 后端 JSON-RPC |
-| `nodeflare` | NodeFlare | `/api/bootstrap` |
-| `cf` | Cloudflare Server Monitor | `/api/servers` |
-| `cfvpsmon` | CF VPS Monitor | `/api/live/clients` |
-| 省略或 `auto` | 自动识别上述类型 | 从面板域名探测 |
-
-`auto` 是协议猜测，不保证兼容经过大幅修改、需要登录或已经关闭公开 API 的面板。无法识别时才使用通用字段嗅探。
-
-NodeGet 的后端 URL 和面板声明的跨域 `apiBase` 属于服务端主动访问的远程目标，模板默认关闭跟随；即使显式打开，也必须同时在 `probe.security.apiBaseOrigins` / `nodegetBackendOrigins` 列出明确的 Origin，否则不会跟随。
-
-## 环境要求
-
-- Node.js 22 或更高版本（建议使用仍受支持的 LTS）；
-- 一个可被浏览器访问的伴生服务地址；
-- 非回环地址必须使用 `wss://`（即使页面本身是 HTTP），并在反向代理中正确转发 WebSocket Upgrade；
-- 伴生服务能够访问所配置的探针面板。
-
-## 本地运行
+如果当前服务器上有这个仓库，先进入目录：
 
 ```bash
 cd Komari-theme/chicken-vps-theme
-npm ci --ignore-scripts
-umask 077
+```
+
+---
+
+## 一、Komari 专用的 `bridge/config.json`
+
+### 1. 创建配置文件
+
+```bash
 cp bridge/config.example.json bridge/config.json
 chmod 600 bridge/config.json
 ```
 
-编辑 `bridge/config.json`，至少配置一个探针源。Komari 公共面板示例：
+`bridge/config.example.json` 已经按 Komari-only 场景写好，但其中的 `monitor.example.com` 是占位域名；复制后必须替换成你的真实 Komari 地址。
+
+`bridge/config.json` 是 JSON 文件，不能写 `//` 注释；下面的注释只用于解释，实际复制时不要复制注释。
+
+### 2. 只使用 Komari 的完整配置
+
+把 `bridge/config.json` 替换成下面内容，只修改你的 Komari 域名：
 
 ```json
 {
-  "name": "Komari",
-  "url": "https://monitor.example.com",
-  "kind": "komari",
-  "timeout": 12000
-}
-```
-
-本地开发时把主题来源加入 `allowedOrigins`：
-
-```json
-{
+  "port": 3777,
   "allowedOrigins": [
-    "http://127.0.0.1:4173",
     "https://monitor.example.com"
-  ]
+  ],
+  "geese": 2,
+  "maxPlayers": 60,
+  "maxProbeChicks": 200,
+  "maxNpcEntities": 500,
+  "maxHandshakesPerMinute": 60,
+  "exposeVisitorGeo": false,
+  "geo": {
+    "externalLookup": false
+  },
+  "probe": {
+    "interval": 15000,
+    "sources": [
+      {
+        "name": "我的 Komari",
+        "url": "https://monitor.example.com",
+        "kind": "komari",
+        "timeout": 12000
+      }
+    ],
+    "sites": []
+  }
 }
 ```
 
-分别启动伴生服务和主题预览：
+### 3. 每个 Komari 配置项是什么意思
 
-```bash
-# 终端 1
-npm run bridge
+#### `port`
 
-# 终端 2
-npm run dev
+```json
+"port": 3777
 ```
 
-打开：
+Bridge 容器内部监听的端口。普通部署保持 `3777` 即可。
+
+Docker 镜像已经设置了 `PORT=3777`，因此正常使用时不需要额外传 `--env PORT`。如果你要改端口，需要同时修改配置、`.env`（如果使用）和 Docker 的端口映射。
+
+#### `allowedOrigins`
+
+```json
+"allowedOrigins": [
+  "https://monitor.example.com"
+]
+```
+
+这里填写的是**打开 Komari 主题页面的浏览器 Origin**，不是 Bridge 地址，也不是 Komari API 地址。
+
+正确：
 
 ```text
-http://127.0.0.1:4173/?bridge=ws://127.0.0.1:3777/ws
+https://monitor.example.com
+http://127.0.0.1:4173
 ```
 
-`?bridge=` 只覆盖当前页面，不会写进 Komari 主题设置。
+错误：
 
-## 生产部署
-
-### 1. 构建和检查
-
-```bash
-npm ci --ignore-scripts
-npm test
-npm run build
+```text
+https://monitor.example.com/ws
+https://monitor.example.com/path
+*
 ```
 
-`npm run build` 会生成可安装的 `dist/`，并检查 Komari 要求的标题、描述和页脚占位符。
+规则：
 
-### 2. 启动伴生服务
+- 只写协议、域名和端口；
+- 不要写 `/ws` 路径；
+- 不要写 `*`；
+- 如果 Komari 同时有多个域名，把每个 Origin 都写进数组；
+- `bridge_url` 可以是 `wss://chicken.example.com/ws`，但这个地址不会自动加入 `allowedOrigins`。
 
-生产配置放在 `bridge/config.json`。不要把带 Token 的配置提交到 Git；推荐使用环境变量：
+#### `geese`
 
-```bash
-export SERVER_STATUS_TOKEN='...'
-export NEZHA_TOKEN='...'
-node bridge/server/index.js
+```json
+"geese": 2
 ```
 
-配置示例：
+农场里大鹅 NPC 的数量。`0` 表示不生成大鹅；一般保持 `2` 即可。
+
+#### `maxPlayers`
+
+```json
+"maxPlayers": 60
+```
+
+允许同时进入游戏的访客数量上限。默认值是 `60`，小规模公开部署保持默认即可。
+
+#### `maxProbeChicks`
+
+```json
+"maxProbeChicks": 200
+```
+
+最多显示多少台 Komari 节点。Komari 节点数量超过这个值时，Bridge 会限制场上探针鸡数量。
+
+#### `maxNpcEntities`
+
+```json
+"maxNpcEntities": 500
+```
+
+场上所有 NPC 的总上限，包含大鹅和探针鸡。一般不需要修改。
+
+#### `maxHandshakesPerMinute`
+
+```json
+"maxHandshakesPerMinute": 60
+```
+
+限制同一个客户端 IP 每分钟最多建立多少次 WebSocket 连接。默认值是 `60`。
+
+如果你使用 Nginx 反向代理，却没有配置可信代理 IP 和 `TRUST_PROXY=1`，所有访客可能会共用 Docker 网关这个限流键，公共站点可能很快达到限制。后文有可选配置。
+
+#### `exposeVisitorGeo`
+
+```json
+"exposeVisitorGeo": false
+```
+
+是否把访客的国家/ASN 显示给其他玩家。只使用 Komari 时建议保持 `false`。
+
+#### `geo.externalLookup`
+
+```json
+"externalLookup": false
+```
+
+是否把访客公网 IP 发送给第三方 GeoIP 服务。只使用 Komari 时保持 `false`，这样 Bridge 不会把访客 IP 发送给 GeoIP 服务。
+
+#### `probe.interval`
+
+```json
+"interval": 15000
+```
+
+Komari 数据轮询间隔，单位是**毫秒**：
+
+```text
+15000 = 每 15 秒轮询一次
+```
+
+默认保持 `15000` 即可。
+
+#### `probe.sources`
+
+```json
+"sources": [
+  {
+    "name": "我的 Komari",
+    "url": "https://monitor.example.com",
+    "kind": "komari",
+    "timeout": 12000
+  }
+]
+```
+
+这是只使用 Komari 时最重要的字段。
+
+| 字段 | 填写什么 |
+| --- | --- |
+| `name` | 显示名称，随便写，例如 `我的 Komari` |
+| `url` | Komari 面板根地址，例如 `https://monitor.example.com` |
+| `kind` | 固定写 `komari` |
+| `timeout` | 单次请求/读取预算，单位毫秒；`12000` 表示 12 秒 |
+
+`url` 填 Komari 根地址即可，不要手动填写：
+
+```text
+/api/nodes
+/api/rpc2
+```
+
+Bridge 会自动访问 Komari 的公开接口：
+
+```text
+/api/nodes
+/api/rpc2
+```
+
+Komari 适配器使用公开 Guest API 和 WebSocket，不需要填写 `tokenEnv`、`headers` 或管理员 API Key。
+
+如果你的 Komari 完全关闭了公开接口、需要登录或使用非标准魔改接口，Bridge 可能读不到数据；这种情况不是配置 Token 就能解决的。
+
+#### `probe.sites`
+
+```json
+"sites": []
+```
+
+这是网站可用性探测列表，不是 Komari 节点列表。只使用 Komari 时保持空数组：
+
+```json
+"sites": []
+```
+
+#### `probe.security`
+
+只使用 Komari 时不需要在配置中写这个对象，Bridge 默认会关闭所有远程跟随策略。如果你的旧配置中已经存在它，保持原样即可，不要为了 Komari 去打开任何选项。
+
+### 4. 更短的最小配置
+
+如果你不想调整默认限制，可以使用这个最小配置：
 
 ```json
 {
-  "name": "ServerStatus",
-  "url": "https://status.example.com",
-  "kind": "auto",
-  "tokenEnv": "SERVER_STATUS_TOKEN",
-  "timeout": 9000
+  "port": 3777,
+  "allowedOrigins": [
+    "https://monitor.example.com"
+  ],
+  "probe": {
+    "sources": [
+      {
+        "url": "https://monitor.example.com",
+        "kind": "komari"
+      }
+    ]
+  }
 }
 ```
 
-建议通过 systemd、Docker 或进程管理器保持伴生服务运行，并只监听受控端口。
+未写的字段会使用默认值：
 
-### 3. 配置 WebSocket 反向代理
+```text
+geese: 2
+maxPlayers: 60
+maxProbeChicks: 200
+maxNpcEntities: 500
+maxHandshakesPerMinute: 60
+exposeVisitorGeo: false
+geo.externalLookup: false
+probe.interval: 15000
+probe.sites: []
+probe.security: 全部关闭
+```
 
-Nginx 示例：
+### 5. 检查 JSON 语法
+
+如果服务器有 Node.js，可以执行：
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('bridge/config.json', 'utf8')); console.log('config ok')"
+```
+
+没有 Node.js 时可以跳过。Bridge 启动时会检查 JSON，格式错误会直接退出并在日志中显示错误。
+
+---
+
+## 二、只使用 Komari 时不需要 `.env`
+
+Komari 的公开接口不需要 Token，所以最简单的部署**不需要 `.env`**。
+
+如果你希望保留一个可选的 Docker 环境文件，可以执行：
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+但它不是 Komari 必填文件，复制后保持默认即可。下面的最小 `docker run` 也不使用 `--env-file`。
+
+`.env` 中只有这些可选内容：
+
+```dotenv
+# Compose 专用；建议改成 id -u 和 id -g 的结果
+DOCKER_UID=1000
+DOCKER_GID=1000
+
+# 一般不需要修改
+# HOST=0.0.0.0
+# PORT=3777
+# CONFIG_PATH=/app/bridge/config.json
+# TRUST_PROXY=1
+```
+
+不要把 Komari 管理员 Key、Agent Token 或其他秘密放进 `.env`、主题设置或 `komari-theme.json`。
+
+---
+
+## 三、Docker 部署 Bridge
+
+### 1. 拉取 GitHub Actions 构建的镜像
+
+仓库中的工作流会发布：
+
+```text
+ghcr.io/cnprobe/chicken-vps-bridge:latest
+```
+
+服务器执行：
+
+```bash
+docker pull ghcr.io/cnprobe/chicken-vps-bridge:latest
+```
+
+如果 GHCR 包是 Private，先登录具有 `read:packages` 权限的账号：
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+```
+
+### 2. 推荐的最小 `docker run`
+
+确认 `bridge/config.json` 已经写好后，在该文件所在目录执行：
+
+```bash
+cd Komari-theme/chicken-vps-theme
+
+docker run -d \
+  --name chicken-vps-bridge \
+  --restart unless-stopped \
+  --user "$(id -u):$(id -g)" \
+  --publish 127.0.0.1:3777:3777 \
+  --volume "$PWD/bridge/config.json:/app/bridge/config.json:ro" \
+  ghcr.io/cnprobe/chicken-vps-bridge:latest
+```
+
+这就是 Komari-only 部署需要的参数。
+
+| 参数 | 作用 |
+| --- | --- |
+| `--name` | 方便查看日志、停止和重启容器 |
+| `--restart unless-stopped` | Docker 重启后自动恢复 Bridge |
+| `--user` | 让容器使用当前宿主机用户读取 `chmod 600` 的配置 |
+| `--publish 127.0.0.1:3777:3777` | 只在本机暴露 Bridge 给 Nginx/Caddy |
+| `--volume` | 把宿主机配置只读挂载到容器 |
+| 镜像名 | GitHub Actions 构建的 Bridge 程序 |
+
+镜像 Dockerfile 已经设置：
+
+```text
+HOST=0.0.0.0
+PORT=3777
+CONFIG_PATH=/app/bridge/config.json
+USER=node
+```
+
+因此不需要再写：
+
+```text
+--env HOST=0.0.0.0
+--env PORT=3777
+--env CONFIG_PATH=/app/bridge/config.json
+--env-file .env
+```
+
+### 3. 如果以 root 身份执行
+
+上面的命令最好由普通部署用户执行。如果当前是 root，`$(id -u):$(id -g)` 会变成 `0:0`，这会削弱非 root 隔离。
+
+可以先查看镜像中 `node` 用户的 UID：
+
+```bash
+docker run --rm --entrypoint id ghcr.io/cnprobe/chicken-vps-bridge:latest -u
+```
+
+假设输出是 `1000`，可以：
+
+```bash
+chown 1000:1000 bridge/config.json
+chmod 600 bridge/config.json
+```
+
+然后从 `docker run` 中删除 `--user "$(id -u):$(id -g)"`，让镜像自带的 `USER node` 运行。
+
+### 4. 可选的额外加固
+
+普通 Komari 部署不需要添加下面参数。如果公网服务需要更严格的容器隔离，可以在最小命令中追加：
+
+```bash
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL
+```
+
+不要使用：
+
+```text
+--privileged
+--network host
+```
+
+### 5. 检查 Bridge
+
+```bash
+docker ps --filter name=chicken-vps-bridge
+docker logs --tail 100 chicken-vps-bridge
+curl http://127.0.0.1:3777/health
+```
+
+正常结果：
+
+```json
+{"ok":true}
+```
+
+如果 Komari 没有出现在农场中，检查：
+
+1. `bridge/config.json` 是否挂载到 `/app/bridge/config.json`；
+2. `probe.sources[0].url` 是否是 Komari 根地址；
+3. `kind` 是否为 `komari`；
+4. `allowedOrigins` 是否是实际 Komari 页面 Origin；
+5. Bridge 容器是否能访问 Komari 域名；
+6. Komari 的 `/api/nodes` 和 `/api/rpc2` 是否可从服务器访问。
+
+### 6. 修改配置和更新镜像
+
+只修改 `bridge/config.json` 时，配置是 bind mount，可以直接重启：
+
+```bash
+docker restart chicken-vps-bridge
+```
+
+更新 Bridge 镜像时：
+
+```bash
+docker pull ghcr.io/cnprobe/chicken-vps-bridge:latest
+docker rm -f chicken-vps-bridge
+```
+
+然后重新执行上面的 `docker run` 命令。
+
+如果以后使用了 `.env` 或修改了 `TRUST_PROXY`、`PORT` 等环境变量，也必须重新创建容器；`docker restart` 不会重新读取环境变量。
+
+### 可选：Docker Compose
+
+`compose.yaml` 默认会在本地构建镜像，不是只拉取 GHCR 镜像的方案。只使用 GitHub 镜像时，仍然建议使用上面的 `docker run`。
+
+如果确实要使用 Compose：
+
+```bash
+cd Komari-theme/chicken-vps-theme
+cp bridge/config.example.json bridge/config.json
+chmod 600 bridge/config.json
+
+# 可选：复制 .env 并填写实际 UID/GID、端口等设置
+cp .env.example .env
+id -u
+id -g
+# 把输出写入 .env 的 DOCKER_UID / DOCKER_GID
+
+docker compose up -d --build
+```
+
+Compose 默认绑定 `127.0.0.1:3777`；修改端口使用 `BRIDGE_PORT`，不要把 `HOST` 改成 `127.0.0.1`。
+
+---
+
+## 四、Nginx 反向代理 WebSocket
+
+Bridge 只提供：
+
+```text
+/health
+/ws
+```
+
+3D 页面由 Komari 提供。建议让 Docker 只在本机监听 Bridge，再由宿主机 Nginx 提供 HTTPS。
+
+假设：
+
+```text
+Komari 页面：https://monitor.example.com
+Bridge 地址：wss://chicken.example.com/ws
+```
+
+把下面的 `location` 放进已经配置好 TLS 证书的 Nginx `server` 中：
 
 ```nginx
 location /ws {
@@ -166,157 +538,200 @@ location /ws {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_read_timeout 75s;
+}
+
+location = /health {
+    proxy_pass http://127.0.0.1:3777/health;
+    proxy_set_header Host $host;
 }
 ```
 
-伴生服务的 `allowedOrigins` 必须包含实际主题来源，例如 `https://monitor.example.com`。直接运行 Node 服务时默认只监听 `127.0.0.1`；只有通过受控反向代理或明确设置 `HOST=0.0.0.0`（Docker 已设置）才对外监听。
-
-### 4. 打包主题
+然后检查并重载：
 
 ```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+对应关系必须是：
+
+```text
+Komari 页面 Origin：       https://monitor.example.com
+config.json allowedOrigins： ["https://monitor.example.com"]
+主题 bridge_url：           wss://chicken.example.com/ws
+```
+
+HTTPS 页面不能使用 `ws://`，浏览器会把它当作混合内容。
+
+### 可选：让限流使用真实访客 IP
+
+只使用 Komari 时，这不是启动 Bridge 的必要条件。但如果没有配置信任代理，所有经过 Nginx 的访客会共用 Docker 网关这一个限流键。
+
+先查 Docker 默认网络网关：
+
+```bash
+docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'
+```
+
+假设输出：
+
+```text
+172.17.0.1
+```
+
+在配置中加入：
+
+```json
+"trustedProxyCidrs": [
+  "172.17.0.1"
+]
+```
+
+并在 `.env` 中设置：
+
+```text
+TRUST_PROXY=1
+```
+
+然后重新创建 Bridge 容器。不要直接填写 `127.0.0.1`；在 Docker NAT 拓扑中，容器看到的直接 peer 通常是 Docker 网关。`trustedProxyCidrs` 支持 IPv4 CIDR；IPv6 当前使用精确地址。
+
+`TRUST_PROXY=1` 只应该在 Nginx 确实是受控代理、并且 Nginx 会覆盖 `X-Forwarded-For` 时开启。不要写 `0.0.0.0/0`。
+
+---
+
+## 五、安装 Komari 主题 ZIP
+
+Bridge 启动并且 `/health` 正常后，再安装主题 ZIP。
+
+### 从源码构建 ZIP
+
+这部分是主题发布流程。只使用 GHCR Bridge 镜像的服务器不需要执行：
+
+```bash
+cd Komari-theme/chicken-vps-theme
+npm ci --ignore-scripts
+npm test
 npm run package
 ```
 
-输出：
+当前 ZIP：
 
 ```text
 release/ChickenFarm-0.1.1.zip
-SHA-256: dc5fe86e224ea8fec3c43b6b55daffccbd8a31d32eed5582fa2edaf147c1b762
+SHA-256: 69d6125a495ac838eba461a4b7dc4a13cb14f656d425fead52517bc52e1f38d9
 ```
 
-在 Komari 后台安装该 ZIP，然后进入主题设置填写：
+ZIP 只包含主题静态资源和清单，不包含：
+
+```text
+bridge/config.json
+.env
+Komari 管理员 Key
+```
+
+在 Komari 后台上传 ZIP，然后进入主题设置填写：
 
 ```text
 wss://chicken.example.com/ws
 ```
 
-主题设置会通过 `/api/public` 公开，因此 `bridge_url` 只能是公开服务地址，**不要填写任何 Token、私有管理 URL 或凭据**。
+主题设置会公开给前端，不能放任何 Token 或管理凭据。
 
-## 探针凭据
+当前 GitHub Actions 自动构建的是 Bridge 镜像；主题 ZIP 仍需要本地 `npm run package` 或后续单独配置的 Artifact/Release 流程生成。
 
-- Komari 内置适配器读取公开的 Guest API，不接受管理员 API Key；私有站点需要额外的受信任服务端集成；
-- 探针 Token 只应放在伴生服务配置或环境变量中；
-- `config.json` 建议权限设为 `0600`；
-- 不要把伴生服务配置目录暴露成静态文件；
-- 访客随机恢复令牌只用于短期重连，不是管理凭据。
+---
 
-### Docker Compose
+## 六、本地开发
 
-在已准备好 `bridge/config.json` 后，可以直接使用模板自带的 Compose：
-
-```bash
-DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up -d --build
-```
-
-Compose 默认只把伴生服务绑定到 `127.0.0.1:3777`，由宿主机上的 Nginx/Caddy 反向代理提供 HTTPS 和 WebSocket。修改端口请设置 `BRIDGE_PORT`（Compose 的 `PORT` 会覆盖 `config.json` 中的端口）。Token 通过环境变量传入，`config.json` 只读挂载；不要把 `bridge/config.json` 提交到仓库。
-
-### Docker run（不使用 Compose）
-
-如果不想使用 Compose，可以在准备好配置后直接运行：
+只有修改主题或 Bridge 源码时才需要 Node.js 22+：
 
 ```bash
 cd Komari-theme/chicken-vps-theme
+npm ci --ignore-scripts
 cp bridge/config.example.json bridge/config.json
 chmod 600 bridge/config.json
-# 编辑 bridge/config.json，至少设置 allowedOrigins 和 probe.sources
-
-docker build -t chicken-vps-bridge:0.1.1 .
-
-docker run -d \\
-  --name chicken-vps-bridge \\
-  --restart unless-stopped \\
-  --user "$(id -u):$(id -g)" \\
-  --read-only \\
-  --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 \\
-  --security-opt no-new-privileges:true \\
-  --cap-drop ALL \\
-  --publish 127.0.0.1:3777:3777 \\
-  --env HOST=0.0.0.0 \\
-  --env PORT=3777 \\
-  --env CONFIG_PATH=/app/bridge/config.json \\
-  --env-file .env \\
-  --volume "$(pwd)/bridge/config.json:/app/bridge/config.json:ro" \\
-  chicken-vps-bridge:0.1.1
 ```
 
-`.env` 只放 `SERVER_STATUS_TOKEN`、`NEZHA_TOKEN` 等伴生服务变量，并设置 `chmod 600 .env`；没有探针 Token 时可以省略 `--env-file .env`。不要使用 `--privileged`、`--network host`，也不要把整个 `bridge/` 目录挂进容器；不要把 `DOCKER_UID`/`DOCKER_GID` 或 `--user` 设置为 `0`。
-
-检查和更新：
+把 Komari 配置写入 `bridge/config.json` 后，终端 1 启动 Bridge：
 
 ```bash
-curl http://127.0.0.1:3777/health
-docker logs -f chicken-vps-bridge
-
-# 修改 config.json 后
-docker restart chicken-vps-bridge
-
-# 更新镜像时先重新 build，再删除旧容器并重新执行上面的 docker run
+npm run bridge
 ```
 
-
-### 使用 GitHub Actions 构建镜像
-
-仓库中的 `.github/workflows/chicken-vps-bridge.yml` 会在以下情况自动构建 Bridge 镜像：
-
-- 推送到 `main`
-- 手动触发 Actions，并可填写 `image_tag`
-- Pull Request 只构建验证，不推送镜像
-
-镜像发布到 GitHub Container Registry：
-
-```text
-ghcr.io/cnprobe/chicken-vps-bridge:latest
-```
-
-服务器无需安装 Node.js，只需拉取镜像：
+终端 2 启动主题预览：
 
 ```bash
-docker pull ghcr.io/cnprobe/chicken-vps-bridge:latest
+npm run dev
 ```
 
-然后把上一节 `docker run` 命令末尾的镜像名替换为：
+浏览器打开：
 
 ```text
-ghcr.io/cnprobe/chicken-vps-bridge:latest
+http://127.0.0.1:4173/?bridge=ws://127.0.0.1:3777/ws
 ```
 
-GHCR 包如果设为 Public，服务器可以直接匿名拉取。如果保持 Private，先使用具有 `read:packages` 权限的 GitHub PAT 登录：
+`?bridge=` 只对本地预览生效，不会写入 Komari 主题设置。
+
+运行测试和构建：
 
 ```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+npm test
+npm run build
 ```
 
-该工作流使用 GitHub Actions 内置 `GITHUB_TOKEN` 推送 GHCR，不需要在仓库 Secrets 中额外保存 Docker Hub 密码。该工作流只构建 Bridge 镜像；主题 ZIP 仍按上面的 `npm run package` 流程或 Release 产物上传到 Komari。
+---
 
-下载的 `.run` 是“Shell 引导器 + gzip tar”自解压包。模板制作过程中只下载和静态拆包，没有执行原安装器。原安装器会以 root 创建 systemd 服务，并从可配置镜像下载 Node；不建议用它部署生产环境。下载文件信息：
+## 七、GitHub Actions
+
+仓库根目录的工作流：
 
 ```text
-URL:    https://down.ggboom.de/chicken-vps-main/chicken-vps-20260924.run
-SHA256: 2817e8343e8fa74ce3849624cd86840847e4fd876a0767b67285d5436a1af103
+.github/workflows/build-theme-image.yml
+.github/workflows/chicken-vps-bridge.yml
 ```
 
-伴生服务只提供 `/health` 和 `/ws`，不提供静态页面；3D 页面由 Komari 主题 ZIP 提供。这样可以缩小桥接服务的 HTTP 攻击面。
+当前主题只监听：
 
-伴生服务默认**不会把访客 IP 发送到第三方 GeoIP 服务**；没有本地 GeoLite2 数据库时，国旗/ASN 留空。若管理员显式设置 `geo.externalLookup: true`，访客公网 IP 才会发送到配置的 HTTPS 服务（`ipwho.is` / `ipapi.co`），请先取得合规授权。
+```text
+Komari-theme/chicken-vps-theme/**
+```
 
-伴生服务包含可选的远程 API 自动发现功能。模板默认限制跨源 `apiBase` 和 NodeGet 后端跟随；即使显式打开开关，也必须同时在 `probe.security.apiBaseOrigins` / `nodegetBackendOrigins` 列出明确的 Origin，否则不会跟随。不要对不可信面板启用远程跳转。
+因此其他目录的修改不会重复构建这个 Bridge 镜像。工作流会：
 
-公网部署还应配置：
+- 推送到 `main` 时构建并推送 GHCR 镜像；
+- Pull Request 只构建验证，不推送；
+- 手动触发时可以填写固定 `image_tag`；
+- 构建 `linux/amd64` 和 `linux/arm64`；
+- 使用 GitHub Actions 内置 `GITHUB_TOKEN`，不需要 Docker Hub 密码。
 
-- **不要把私有监控面板接入公开桥接服务**：WebSocket 只有 Origin 校验，没有账号认证；节点名称、在线状态和监控数值会广播给所有能连接的人。来源 URL/原始错误已默认脱敏，但统计内容仍应视为公开数据。
-- WebSocket Origin 白名单；
-- 反向代理连接数、请求速率和空闲超时限制；
-- `maxPlayers`；
-- `maxProbeChicks`（默认 200，限制异常探针响应制造大量 NPC）；
-- `maxNpcEntities`（默认 500，限制场上 NPC 总数）；
-- `maxHandshakesPerMinute`（默认 60；反向代理后的共享 IP 应配置可信代理 CIDR，必要时再调高）；
-- `exposeVisitorGeo`（默认 `false`，不向其他访客广播访客国家/ASN；需要时显式开启）；
-- 只有在 `trustedProxyCidrs` 明确列出反向代理网段时，才会信任 `CF-Connecting-IP` / `X-Forwarded-For`；
-- 定期备份 `bridge/config.json`；
-- 监控伴生服务日志和资源占用。
+新主题的 CI 规则见：
 
-更完整的数据流、信任边界和部署检查见 [`SECURITY.md`](./SECURITY.md)。当前游戏状态保存在内存中，服务重启后会清空。模板适合小规模公开互动；如果要跨实例组队、持久排行或商业化防作弊，需要额外的认证票据、持久化和限流服务。
+```text
+.github/workflows/README.md
+```
+
+---
+
+## 八、只使用 Komari 时的安全注意事项
+
+- 不要把 Komari 管理 API Key 或 Agent Token 写进 `komari-theme.json`；
+- Komari 主题设置会公开给前端，只能填写公开的 Bridge 地址；
+- `bridge/config.json` 建议权限为 `0600`；
+- 生产环境使用 `wss://`；
+- `allowedOrigins` 只填真实 Komari 页面 Origin，不要使用 `*`；
+- 默认不向第三方 GeoIP 服务发送访客 IP；
+- Bridge 的 WebSocket Origin 白名单不是账号认证，不要把私有监控面板直接暴露给公众；
+- 只挂载 `bridge/config.json`，不要把整个 `bridge/` 目录挂进容器；
+- 不要使用 `--privileged`、`--network host` 或 root 用户；
+- 修改配置后用 `docker restart`，修改环境变量或镜像后重新创建容器；
+- Bridge 状态主要在内存中，重启会清空当前游戏状态。
+
+完整信任边界见 [`SECURITY.md`](./SECURITY.md)。
+
+---
 
 ## 来源与再分发
 

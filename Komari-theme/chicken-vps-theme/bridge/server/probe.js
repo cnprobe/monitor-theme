@@ -306,16 +306,26 @@ export class Probe {
     if (changed && this.onSitesUpdate) this.onSitesUpdate(list);
   }
 
-  /** 网站列表：优先用 sources 里显式声明的站点，兼容老的 legacySites */
+  /** 网站列表：合并 sources 中显式声明的站点和旧的 probe.sites。 */
   siteList() {
     const explicit = this.sources.filter(s => s.site === true && s.url);
-    const list = explicit.length ? explicit : (this.legacySites || []);
-    return list.map(s => ({
-      key: s.key || s.name || s.url,
-      name: s.name || s.key || s.url,
-      url: s.url,
-      region: s.region ?? null,
-      timeout: s.timeout
-    }));
+    const legacy = Array.isArray(this.legacySites)
+      ? this.legacySites.map(s => typeof s === 'string' ? { url: s } : s)
+      : [];
+    const seen = new Set();
+    return [...explicit, ...legacy]
+      .filter(s => {
+        const key = s?.key || s?.name || s?.url;
+        if (!key || seen.has(String(key))) return false;
+        seen.add(String(key));
+        return true;
+      })
+      .map(s => ({
+        key: s.key || s.name || s.url,
+        name: s.name || s.key || s.url,
+        url: s.url,
+        region: s.region ?? null,
+        timeout: s.timeout
+      }));
   }
 }

@@ -215,7 +215,31 @@ function ipv4Number(ip) {
   return (((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3]) >>> 0;
 }
 
-/** 只在明确的代理 CIDR 列表命中时信任转发头。IPv6 使用精确地址匹配。 */
+/** 校验可信代理列表：IPv4 支持 CIDR，IPv6 当前只接受精确地址。 */
+export function validateTrustedProxyCidrs(values, field = 'trustedProxyCidrs') {
+  if (!Array.isArray(values)) throw new Error(`${field} must be an array`);
+  return values.map((entry, index) => {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      throw new Error(`${field}[${index}] must be a non-empty IP address or CIDR`);
+    }
+    const parts = entry.trim().split('/');
+    if (parts.length > 2) throw new Error(`${field}[${index}] has too many '/' separators`);
+    const [network, prefixRaw] = parts;
+    const version = net.isIP(network);
+    if (!version) throw new Error(`${field}[${index}] must contain a valid IP address`);
+    if (prefixRaw !== undefined) {
+      if (!/^\d+$/.test(prefixRaw)) throw new Error(`${field}[${index}] prefix must be an integer`);
+      const prefix = Number(prefixRaw);
+      const max = version === 4 ? 32 : 128;
+      if (prefix > max) throw new Error(`${field}[${index}] prefix must be between 0 and ${max}`);
+      if (version === 6) {
+        throw new Error(`${field}[${index}] IPv6 trusted proxies must be exact addresses, not CIDR ranges`);
+      }
+    }
+    return entry.trim();
+  });
+}
+
 export function isTrustedProxy(ip, cidrs) {
   if (!Array.isArray(cidrs) || !cidrs.length || net.isIP(ip) === 0) return false;
   for (const entry of cidrs) {
@@ -234,4 +258,38 @@ export function isTrustedProxy(ip, cidrs) {
     }
   }
   return false;
+}
+
+function normalizeIp(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const candidate = raw.toLowerCase().startsWith('::ffff:') ? raw.slice(7) : raw;
+  return net.isIP(candidate) ? candidate : null;
+}
+
+function firstHeaderValue(headers, name) {
+  const value = headers?.[name.toLowerCase()] ?? headers?.[name];
+  return String(value ?? '').split(',')[0].trim();
+}
+
+/**
+ * 从请求中得到用于访客身份和限流的地址。
+ *
+ * 只有直连 peer 明确位于 trustedProxyCidrs 时才读取转发头；CF 头还需要
+ * trustCloudflareIp，X-Forwarded-For 还需要 trustProxy。这样 game 和握手限流
+ * 使用完全相同的信任边界，不会因为某一条路径漏检环境变量而放大限流桶。
+ */
+export function resolveClientIp(peer, headers = {}, options = {}) {
+  const direct = normalizeIp(peer) || 'unknown';
+  if (!isTrustedProxy(direct, options.trustedProxyCidrs || [])) return direct;
+
+  if (options.trustCloudflareIp === true) {
+    const value = normalizeIp(firstHeaderValue(headers, 'cf-connecting-ip'));
+    if (value) return value;
+  }
+  if (options.trustProxy === true) {
+    const value = normalizeIp(firstHeaderValue(headers, 'x-forwarded-for'));
+    if (value) return value;
+  }
+  return direct;
 }

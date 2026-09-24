@@ -9,7 +9,9 @@ import {
   isSameOrigin,
   isTrustedProxy,
   normalizeAllowedOrigins,
+  resolveClientIp,
   resolveProbeSecurity,
+  validateTrustedProxyCidrs,
   stripAuthorizationHeaders,
   withoutRemoteCredentials,
 } from '../server/security.js';
@@ -82,6 +84,35 @@ test('forwarded headers are trusted only for an explicitly listed proxy', () => 
   assert.equal(isTrustedProxy('10.0.0.8', ['10.0.0.0/8']), true);
   assert.equal(isTrustedProxy('203.0.113.8', ['10.0.0.0/8']), false);
   assert.equal(isTrustedProxy('203.0.113.8', []), false);
+});
+
+test('client IP resolution uses the same flags for game and rate limiting', () => {
+  const headers = {
+    'cf-connecting-ip': '198.51.100.20',
+    'x-forwarded-for': '203.0.113.10, 10.0.0.1',
+  };
+  assert.equal(resolveClientIp('172.17.0.1', headers, {
+    trustedProxyCidrs: ['172.17.0.1'],
+    trustCloudflareIp: false,
+    trustProxy: false,
+  }), '172.17.0.1');
+  assert.equal(resolveClientIp('172.17.0.1', headers, {
+    trustedProxyCidrs: ['172.17.0.1'],
+    trustCloudflareIp: false,
+    trustProxy: true,
+  }), '203.0.113.10');
+  assert.equal(resolveClientIp('172.17.0.1', headers, {
+    trustedProxyCidrs: ['172.17.0.1'],
+    trustCloudflareIp: true,
+    trustProxy: false,
+  }), '198.51.100.20');
+});
+
+test('trusted proxy list rejects malformed and unsupported CIDRs', () => {
+  assert.deepEqual(validateTrustedProxyCidrs(['10.0.0.0/8', '::1']), ['10.0.0.0/8', '::1']);
+  assert.throws(() => validateTrustedProxyCidrs(['not-a-cidr']), /valid IP/);
+  assert.throws(() => validateTrustedProxyCidrs(['2001:db8::/32']), /exact addresses/);
+  assert.throws(() => validateTrustedProxyCidrs(['10.0.0.0/33']), /between 0 and 32/);
 });
 
 test('credentials are refused for non-loopback plaintext HTTP probes', async () => {

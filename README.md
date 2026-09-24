@@ -49,6 +49,12 @@ Komari-theme/chicken-vps-theme/**
 4. 为每个独立镜像使用唯一的 GHCR 镜像名和缓存范围。
 5. 在 `main` 分支推送时自动构建；需要固定版本时使用调用工作流的 `workflow_dispatch` 输入 `image_tag`。
 
+当前主题的完整配置、Docker 部署和 `.env` 说明见：
+
+```text
+Komari-theme/chicken-vps-theme/README.md
+```
+
 当前主题镜像：
 
 ```text
