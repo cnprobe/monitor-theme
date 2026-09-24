@@ -1,0 +1,16 @@
+bridge/config.json
+.env
+.env.*
+!.env.example
+*.run
+*.mmdb
+*.pem
+*.key
+*.crt
+*.bak
+*.backup
+*.log
+.npmrc
+install.sh
+node_modules/
+release/

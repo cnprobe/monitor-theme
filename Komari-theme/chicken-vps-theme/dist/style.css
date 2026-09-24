@@ -1,0 +1,320 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%; overflow: hidden; background: #9fd08a;
+  /* 禁止移动端的下拉刷新 / 橡皮筋滚动 / 双击缩放 */
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+body { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; user-select: none; -webkit-user-select: none; }
+#app { position: fixed; inset: 0; }
+canvas { display: block; touch-action: none; }
+
+/* 模块加载完成前的占位提示（main.js 首帧渲染后移除） */
+#boot {
+  position: fixed; inset: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(20, 40, 15, .75); font-size: 17px; font-weight: bold;
+  pointer-events: none;
+}
+
+/* 安全区变量：刘海屏/挖孔屏/手势条。
+   不支持 env() 的浏览器 fallback 为 0px，宏展开后就是原来的 12/16px。 */
+:root {
+  --sa-t: env(safe-area-inset-top, 0px);
+  --sa-r: env(safe-area-inset-right, 0px);
+  --sa-b: env(safe-area-inset-bottom, 0px);
+  --sa-l: env(safe-area-inset-left, 0px);
+}
+
+/* ---------- HUD ---------- */
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+
+#topbar {
+  position: absolute; top: calc(12px + var(--sa-t)); left: calc(16px + var(--sa-l));
+  background: rgba(20, 30, 15, .55); color: #fff;
+  padding: 8px 14px; border-radius: 10px; font-size: 15px; font-weight: bold;
+  backdrop-filter: blur(4px); line-height: 1.5;
+}
+.topbar-brand { margin-bottom: 2px; }
+.topbar-counts { display: flex; gap: 12px; align-items: center; }
+#online, #web-online, #visitors { color: #ffd95e; }
+#bridge-state {
+  margin-top: 5px; padding: 2px 8px; border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px; color: #fff; background: rgba(255,255,255,.12);
+  font: inherit; font-size: 11px; cursor: pointer; pointer-events: auto;
+}
+#bridge-state.connected { background: rgba(70, 170, 80, .55); }
+#bridge-state.connecting, #bridge-state.reconnecting { background: rgba(210, 155, 45, .55); }
+#bridge-state.missing { background: rgba(70, 90, 75, .65); }
+#bridge-state.error { background: rgba(190, 70, 60, .65); }
+#topbar.stale { background: rgba(70, 30, 20, .62); }
+#topbar.stale #online { color: #ff9f6b; }
+
+/* 探针数据源异常提示（默认隐藏；可多行，每行一个源的原因） */
+#probe-warn {
+  position: absolute; top: calc(12px + var(--sa-t)); left: 50%; transform: translateX(-50%);
+  background: rgba(120, 40, 30, .82); color: #ffe0d0;
+  font-size: 13px; padding: 6px 14px; border-radius: 12px;
+  max-width: 70vw; text-align: left;
+  white-space: pre-line; line-height: 1.45;
+  opacity: 0; transition: opacity .25s; pointer-events: none;
+}
+#probe-warn.show { opacity: 1; }
+
+#board {
+  position: absolute; top: calc(12px + var(--sa-t)); right: calc(16px + var(--sa-r));
+  min-width: 220px; max-width: 300px;
+  background: rgba(20, 30, 15, .55); color: #fff;
+  border-radius: 10px; padding: 10px 14px; font-size: 13px;
+  backdrop-filter: blur(4px);
+  pointer-events: auto; cursor: pointer;
+}
+#board h3 { font-size: 13px; color: #ffd95e; margin-bottom: 6px; }
+#board.collapsed #board-rows { display: none; }
+#board.collapsed h3 { margin-bottom: 0; }
+#board .row { display: flex; justify-content: space-between; gap: 16px; line-height: 1.7; }
+#board .row.me { color: #ffd95e; }
+/* 离场玩家（记录保留在榜上但人已不在场）：整体灰显 */
+#board .row.off { color: #8b948c; }
+#board .row.off b { color: #8b948c; }
+
+#feed {
+  position: absolute; top: calc(14px + var(--sa-t)); left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  max-width: 90vw;
+}
+.feed-item {
+  background: rgba(20, 30, 15, .65); color: #ffe9b0; font-size: 13px;
+  padding: 6px 14px; border-radius: 999px; animation: pop .25s ease-out;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 90vw;
+}
+@keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+#ko-banner {
+  position: absolute; top: 38%; left: 0; right: 0; text-align: center;
+  color: #fff; font-size: 30px; font-weight: bold; text-shadow: 0 2px 8px rgba(0,0,0,.6);
+  opacity: 0; transition: opacity .2s; padding: 0 12px;
+}
+#ko-banner.show { opacity: 1; }
+
+#me {
+  position: absolute; left: calc(16px + var(--sa-l)); bottom: calc(16px + var(--sa-b)); width: 260px;
+  background: rgba(20, 30, 15, .55); border-radius: 10px; padding: 10px 14px;
+  color: #fff; backdrop-filter: blur(4px);
+  pointer-events: auto; /* #hud 整体是 pointer-events:none，面板自己必须开，否则头像/改名按钮全点不到 */
+}
+/* 玩家资料行：名字 + ✏️ 按钮。
+   统一 line-height:1 + 按钮 inline-flex 居中：emoji 字形在默认行盒里整体偏上 */
+#me-line { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#me-name { flex: 1; min-width: 0; font-size: 14px; font-weight: bold; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 两个按钮统一透明底（✏️ / 确定），悬停才显玻璃底 */
+#me-edit, #me-name-ok {
+  background: transparent; color: #fff; border: 0; border-radius: 8px;
+  padding: 3px 7px; cursor: pointer; font-size: 14px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: middle;
+}
+#me-edit:hover, #me-name-ok:hover { background: rgba(255,255,255,.16); }
+/* 改名浮层：从面板上方浮出，不占卡片内部空间 */
+#me-name-editor {
+  position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; z-index: 20;
+  background: rgba(18, 26, 13, .92); border: 1px solid rgba(255,255,255,.18);
+  border-radius: 10px; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+#me-name-row { display: flex; gap: 6px; }
+#me-name-input {
+  flex: 1; min-width: 0; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.25);
+  color: #fff; border-radius: 6px; padding: 4px 8px; font-size: 13px; outline: none;
+}
+/* !important 必须保留：#me-name-editor 是 ID 选择器且设了 display:flex，
+   特异性高于类选择器，没有 !important 时 .hidden 压不住它 → 弹层永远显示 */
+.hidden { display: none !important; }
+#hpbar { height: 10px; background: rgba(255,255,255,.18); border-radius: 5px; overflow: hidden; }
+#hpfill { height: 100%; width: 100%; background: linear-gradient(90deg, #7ec850, #b8e986); border-radius: 5px; transition: width .15s; }
+#hpfill.low { background: linear-gradient(90deg, #e05252, #ff9a6b); }
+#score { font-size: 12px; color: #cfe8b0; margin-top: 6px; }
+
+/* 常驻操作提示（不随时间淡出）。桌面/触屏两套文案，按 body.touch 切换 */
+#hint-desktop, #hint-touch { display: none; }
+body:not(.touch) #hint-desktop { display: block; }
+body.touch #hint-touch { display: block; }
+body.hide-controls #hint-desktop,
+body.hide-controls #hint-touch { display: none !important; }
+#powered-by {
+  position: fixed; z-index: 7; left: 50%; bottom: calc(3px + var(--sa-b));
+  transform: translateX(-50%); color: rgba(255,255,255,.72);
+  font-size: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.55); pointer-events: none;
+}
+.hint {
+  position: absolute; bottom: calc(16px + var(--sa-b)); left: 50%; transform: translateX(-50%);
+  color: rgba(255,255,255,.85); font-size: 13px;
+  background: rgba(20,30,15,.45); padding: 6px 14px; border-radius: 999px;
+  white-space: nowrap;
+}
+body.touch .hint {
+  font-size: 11px; padding: 5px 10px;
+  bottom: calc(6px + var(--sa-b));
+  max-width: calc(100vw - 24px); overflow: hidden; text-overflow: ellipsis;
+  opacity: .8;
+}
+
+/* ==========================================================================
+   触屏操控层
+   —— 默认隐藏；body.touch 时显示。
+   —— 容器 pointer-events:none，只有具体控件 auto，空白处手势穿透到 canvas 转视角。
+   —— 尺寸用 min() 兼顾手机与平板，同时不小于 44px（iOS/Android 的最小可点尺寸）。
+   ========================================================================== */
+#touch-ui { display: none; }
+body.touch #touch-ui {
+  display: block;
+  position: fixed; inset: 0; z-index: 6;
+  pointer-events: none;
+  /* 触屏控件不参与文本选择/长按菜单 */
+  user-select: none; -webkit-user-select: none;
+  touch-action: none;
+}
+
+/* ---- 虚拟摇杆（左下）---- */
+.tc-stick {
+  position: absolute;
+  left: calc(20px + var(--sa-l));
+  bottom: calc(24px + var(--sa-b));
+  width: min(30vw, 148px);
+  height: min(30vw, 148px);
+  min-width: 96px; min-height: 96px;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+  /* 底座：极淡的一圈，够看见但不挡视线 */
+  background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.10), rgba(20,30,15,.30));
+  border: 2px solid rgba(255,255,255,.32);
+  box-shadow: inset 0 0 22px rgba(0,0,0,.22);
+  transition: border-color .12s, background .12s;
+}
+.tc-stick.active { border-color: rgba(255,217,94,.75); }
+.tc-stick-ring {
+  position: absolute; inset: 26%;
+  border-radius: 50%; border: 1px dashed rgba(255,255,255,.22);
+  pointer-events: none;
+}
+.tc-stick-knob {
+  position: absolute; left: 50%; top: 50%;
+  width: 42%; height: 42%;
+  margin-left: -21%; margin-top: -21%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, rgba(255,255,255,.92), rgba(210,220,200,.62));
+  border: 2px solid rgba(255,255,255,.55);
+  box-shadow: 0 3px 10px rgba(0,0,0,.3);
+  pointer-events: none;
+  /* 无过渡：跟手才不飘。松手回中是 JS 直接置 0，也是瞬时。 */
+}
+
+/* ---- 动作按钮（右下）---- */
+.tc-actions {
+  position: absolute;
+  right: calc(18px + var(--sa-r));
+  bottom: calc(22px + var(--sa-b));
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 12px;
+  align-items: end;
+  justify-items: center;
+  pointer-events: none;
+}
+.tc-btn {
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-appearance: none; appearance: none;
+  font-family: inherit; font-weight: bold; color: #fff;
+  width: min(19vw, 88px);
+  height: min(19vw, 88px);
+  min-width: 60px; min-height: 60px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.45);
+  background: rgba(20, 30, 15, .42);
+  backdrop-filter: blur(3px);
+  font-size: 16px;
+  line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .08s, background .12s, border-color .12s;
+}
+.tc-btn.press, .tc-btn:active {
+  transform: scale(.92);
+  background: rgba(255, 217, 94, .55);
+  border-color: rgba(255,255,255,.85);
+}
+.tc-btn.on {
+  background: rgba(126, 200, 80, .62);
+  border-color: rgba(220, 255, 190, .9);
+}
+/* 主攻击键更大一圈，拇指最容易够到 */
+.tc-btn-peck {
+  width: min(23vw, 104px);
+  height: min(23vw, 104px);
+  min-width: 72px; min-height: 72px;
+  font-size: 19px;
+  background: rgba(180, 70, 40, .48);
+  border-color: rgba(255, 190, 150, .6);
+}
+.tc-btn-run { font-size: 14px; }
+.tc-btn-jump { font-size: 15px; }
+
+/* ---- 横屏：竖向空间紧张，控件压扁并贴边 ---- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .tc-stick {
+    width: min(22vh, 120px); height: min(22vh, 120px);
+    min-width: 84px; min-height: 84px;
+    bottom: calc(14px + var(--sa-b));
+  }
+  .tc-actions { bottom: calc(12px + var(--sa-b)); gap: 10px; }
+  .tc-btn { width: min(15vh, 76px); height: min(15vh, 76px); min-width: 56px; min-height: 56px; font-size: 14px; }
+  .tc-btn-peck { width: min(18vh, 88px); height: min(18vh, 88px); min-width: 64px; min-height: 64px; font-size: 17px; }
+  body.touch .hint { display: none; }   /* 横屏不放提示，太挤 */
+  #ko-banner { font-size: 24px; top: 30%; }
+}
+
+/* ==========================================================================
+   窄屏（手机竖屏）：HUD 整体瘦身，给摇杆/按钮让出中下部空间
+   ========================================================================== */
+@media (max-width: 560px) {
+  /* backdrop-filter 在低端安卓上是合成器热点，窄屏降级为纯色半透明 */
+  #topbar, #board, #me { backdrop-filter: none; }
+  #topbar {
+    font-size: 12px; padding: 6px 10px; border-radius: 8px;
+    line-height: 1.45;
+    top: calc(8px + var(--sa-t)); left: calc(8px + var(--sa-l));
+  }
+  #board {
+    min-width: 0; max-width: 46vw; font-size: 11px;
+    padding: 7px 10px; border-radius: 8px;
+    top: calc(8px + var(--sa-t)); right: calc(8px + var(--sa-r));
+  }
+  #board h3 { font-size: 11px; margin-bottom: 4px; }
+  #board .row { gap: 10px; line-height: 1.55; }
+  #feed { top: calc(calc(8px + var(--sa-t)) + 54px); }
+  .feed-item { font-size: 11px; padding: 4px 10px; }
+  #me {
+    width: min(52vw, 220px); padding: 7px 10px; border-radius: 8px;
+    left: calc(8px + var(--sa-l)); bottom: calc(8px + var(--sa-b));
+  }
+  #me-name { font-size: 12px; margin-bottom: 4px; }
+  #hpbar { height: 8px; }
+  #score { font-size: 11px; margin-top: 4px; }
+  #ko-banner { font-size: 22px; }
+}
+
+/* 极窄的横屏（小手机横过来）：面板再收一点 */
+@media (max-width: 900px) and (max-height: 430px) {
+  #topbar { font-size: 11px; padding: 4px 8px; }
+  #board { display: none; }              /* 排行榜彻底让位，靠点击展开也不挤 */
+  #me { width: min(40vw, 190px); font-size: 11px; }
+  #me-name { font-size: 11px; }
+}
+
+/* 触屏设备上一律不要 hover 效果（会粘住） */
+@media (hover: none) {
+  #board { cursor: default; }
+}

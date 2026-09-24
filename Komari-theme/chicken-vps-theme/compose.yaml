@@ -1,0 +1,27 @@
+services:
+  chicken-bridge:
+    build: .
+    restart: unless-stopped
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${BRIDGE_PORT:-3777}:${BRIDGE_PORT:-3777}"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "${BRIDGE_PORT:-3777}"
+      CONFIG_PATH: /app/bridge/config.json
+      SERVER_STATUS_TOKEN: "${SERVER_STATUS_TOKEN:-}"
+      NEZHA_TOKEN: "${NEZHA_TOKEN:-}"
+    volumes:
+      - type: bind
+        source: ./bridge/config.json
+        target: /app/bridge/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

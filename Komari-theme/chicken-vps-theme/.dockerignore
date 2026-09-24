@@ -1,0 +1,17 @@
+node_modules
+release
+dist
+theme
+bridge/config.json
+.env
+.env.*
+*.run
+*.mmdb
+*.pem
+*.key
+*.crt
+*.bak
+*.backup
+*.log
+.npmrc
+install.sh

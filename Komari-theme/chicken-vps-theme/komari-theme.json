@@ -1,0 +1,82 @@
+{
+  "name": {
+    "zh-CN": "Komari 养鸡场",
+    "en": "Komari Chicken Farm"
+  },
+  "short": "ChickenFarm",
+  "description": {
+    "zh-CN": "把 Komari 节点变成 3D 小鸡，并支持访客在线互啄的 companion 主题。",
+    "en": "A Komari companion theme that turns nodes into 3D chickens and supports multiplayer pecking."
+  },
+  "version": "0.1.1",
+  "author": "Komari Community",
+  "url": "https://github.com/komari-monitor/komari-document",
+  "preview": "preview.svg",
+  "configuration": {
+    "type": "managed",
+    "name": {
+      "zh-CN": "养鸡场设置",
+      "en": "Chicken Farm Settings"
+    },
+    "data": [
+      {
+        "key": "bridge_url",
+        "name": {
+          "zh-CN": "伴生服务 WebSocket 地址",
+          "en": "Companion WebSocket URL"
+        },
+        "type": "string",
+        "default": "",
+        "help": {
+          "zh-CN": "例如 wss://chicken.example.com/ws。这里只能填写公开地址，切勿填写任何 Token；伴生服务的探针凭据必须保存在服务端。",
+          "en": "For example wss://chicken.example.com/ws. Put only a public URL here, never a token. Keep probe credentials on the companion service."
+        }
+      },
+      {
+        "key": "player_name",
+        "name": {
+          "zh-CN": "默认访客名字",
+          "en": "Default visitor name"
+        },
+        "type": "string",
+        "default": "小鸡",
+        "help": {
+          "zh-CN": "最多 12 个字符；访客仍可在页面中修改。",
+          "en": "Up to 12 characters. Visitors can still change it on the page."
+        }
+      },
+      {
+        "key": "label_mode",
+        "name": {
+          "zh-CN": "鸡名牌信息量",
+          "en": "Nameplate detail"
+        },
+        "type": "select",
+        "options": "完整,精简,关闭",
+        "default": "完整",
+        "help": {
+          "zh-CN": "完整显示 CPU、内存、流量和在线时长；精简只显示状态；关闭隐藏名牌。",
+          "en": "Full shows CPU, memory, traffic and uptime; compact shows status only; hidden disables nameplates."
+        }
+      },
+      {
+        "key": "sound_enabled",
+        "name": {
+          "zh-CN": "启用互动音效",
+          "en": "Enable interaction sounds"
+        },
+        "type": "switch",
+        "default": true
+      },
+      {
+        "key": "show_controls",
+        "name": {
+          "zh-CN": "显示操作提示",
+          "en": "Show controls"
+        },
+        "type": "switch",
+        "default": true
+      }
+    ]
+  }
+}
