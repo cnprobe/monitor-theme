@@ -154,8 +154,38 @@ export function normalizeRest(j) {
 // WS 只是「拿实时指标」的加分项，不该独占整个读取预算 —— 超时就用 REST 结果。
 const WS_HANDSHAKE_MS = 8000;
 
+// 私有 Komari 的 API Key 由 Bridge 服务端注入；统一补 Bearer，避免把凭据下发到浏览器。
+function normalizeAuthHeaders(headers) {
+  const out = { ...(headers || {}) };
+  const key = Object.keys(out).find(name => name.toLowerCase() === 'authorization');
+  if (!key || !String(out[key]).trim()) return out;
+  const value = String(out[key]).trim();
+  delete out[key];
+  out.Authorization = /^Bearer\s/i.test(value) ? value : `Bearer ${value}`;
+  return out;
+}
+
+export async function readThemeSettings(url, opts = {}) {
+  const base = siteRoot(url);
+  const headers = normalizeAuthHeaders(opts.headers);
+  const result = await fetchJson(`${base}/api/public`, {
+    ms: opts.ms ?? 10000,
+    headers,
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  const data = result.data?.data && typeof result.data.data === 'object'
+    ? result.data.data
+    : result.data;
+  const settings = data?.theme_settings;
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return { ok: false, error: '响应里没有 theme_settings' };
+  }
+  return { ok: true, settings };
+}
+
 export async function read(url, opts = {}) {
   const base = siteRoot(url);
+  const headers = normalizeAuthHeaders(opts.headers);
   let host = base;
   try { host = new URL(base).host; } catch { /* ignore */ }
   const rpcUrl = opts.rpcUrl || base.replace(/^http/, 'ws') + '/api/rpc2';
@@ -168,6 +198,7 @@ export async function read(url, opts = {}) {
     try {
       const client = opts.client || new RpcClient(rpcUrl, {
         origin: base,
+        headers,
         timeout: Math.min(opts.wsMs ?? WS_HANDSHAKE_MS, opts.ms ?? WS_HANDSHAKE_MS),
         ttl: opts.ttl ?? 5000,
       });
@@ -187,7 +218,7 @@ export async function read(url, opts = {}) {
     }
   })();
 
-  const restPromise = readRest(base, opts);
+  const restPromise = readRest(base, { ...opts, headers });
 
   const [ws, rest] = await Promise.all([wsPromise, restPromise.catch(e => ({ ok: false, error: e.message }))]);
 
@@ -221,9 +252,10 @@ export async function read(url, opts = {}) {
 async function readRest(base, opts) {
   // REST 偶发超时（实测 status.sunver.de 有时 1.8s，有时直接超时）→ 重试一次。
   // 这条通道是「WS 不可用时的唯一退路」，多花一次请求换可用性是划算的。
-  let r = await fetchJson(base + '/api/nodes', { ms: opts.restMs ?? Math.min(opts.ms ?? 10000, 8000) });
+  const request = { ms: opts.restMs ?? Math.min(opts.ms ?? 10000, 8000), headers: opts.headers || {} };
+  let r = await fetchJson(base + '/api/nodes', request);
   if (!r.ok && /超时|timeout/i.test(r.error || '')) {
-    r = await fetchJson(base + '/api/nodes', { ms: opts.restMs ?? Math.min(opts.ms ?? 10000, 8000) });
+    r = await fetchJson(base + '/api/nodes', request);
   }
   if (!r.ok) return { ok: false, error: r.error };
   if (!r.data || !Array.isArray(r.data.data)) {

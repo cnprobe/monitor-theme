@@ -9,7 +9,7 @@
 Bridge 镜像    → 在服务器上运行，提供权威游戏状态、Komari 数据轮询和 WebSocket
 ```
 
-只安装 ZIP 不会启动 Bridge，也不会产生多人互啄服务。只使用 Komari 时，服务器不需要 Node.js，不需要 `npm install`，也不需要 `.env`；唯一必须准备的服务端文件是：
+只安装 ZIP 不会启动 Bridge，也不会产生多人互啄服务。只使用公开 Komari 时，服务器不需要 Node.js，不需要 `npm install`，也不需要 `.env`；唯一必须准备的服务端文件是：
 
 ```text
 bridge/config.json
@@ -242,7 +242,7 @@ Bridge 会自动访问 Komari 的公开接口：
 /api/rpc2
 ```
 
-Komari 适配器使用公开 Guest API 和 WebSocket，不需要填写 `tokenEnv`、`headers` 或管理员 API Key。
+公开 Komari 不需要填写 `tokenEnv`、`headers` 或管理员 API Key；私有 Komari 的 API Key 配置方式见后文。
 
 如果你的 Komari 完全关闭了公开接口、需要登录或使用非标准魔改接口，Bridge 可能读不到数据；这种情况不是配置 Token 就能解决的。
 
@@ -310,9 +310,9 @@ node -e "JSON.parse(require('fs').readFileSync('bridge/config.json', 'utf8')); c
 
 ---
 
-## 二、只使用 Komari 时不需要 `.env`
+## 二、公开 Komari 不需要 `.env`
 
-Komari 的公开接口不需要 Token，所以最简单的部署**不需要 `.env`**。
+公开 Komari 接口不需要 Token，所以最简单的公开部署**不需要 `.env`**。
 
 如果你希望保留一个可选的 Docker 环境文件，可以执行：
 
@@ -337,7 +337,104 @@ DOCKER_GID=1000
 # TRUST_PROXY=1
 ```
 
-不要把 Komari 管理员 Key、Agent Token 或其他秘密放进 `.env`、主题设置或 `komari-theme.json`。
+不要把 Komari 管理员 Key、Agent Token 或其他秘密放进主题设置或 `komari-theme.json`。私有 Komari 的 API Key 如果使用，只能保存在 Bridge 服务器的 `.env` 或其他服务端 Secret 中。
+
+### 私有 Komari 的可选配置
+
+如果你的 Komari 开启了“私有站点”，可以给 Bridge 配置 Komari API Key。API Key 只由 Bridge 读取，不会发送给浏览器，也不会放进 Komari 主题设置。
+
+先复制环境文件：
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+在 `.env` 中填写 Komari 后台生成的 API Key 原始值：
+
+```dotenv
+KOMARI_API_KEY=这里填写原始APIKey
+```
+
+然后在 `bridge/config.json` 的 Komari 源中增加：
+
+```json
+{
+  "name": "我的私有 Komari",
+  "url": "https://monitor.example.com",
+  "kind": "komari",
+  "tokenEnv": "KOMARI_API_KEY",
+  "timeout": 12000
+}
+```
+
+Bridge 会自动向 Komari 发送：
+
+```text
+Authorization: Bearer <KOMARI_API_KEY>
+```
+
+私有模式下，Bridge 读取 `/api/public` 中的主题设置时也会使用同一个服务端 Key；Key 不会返回给浏览器。
+
+使用私有配置时，Docker 命令必须带上环境文件：
+
+```bash
+docker run -d \
+  --name chicken-vps-bridge \
+  --restart unless-stopped \
+  --user "$(id -u):$(id -g)" \
+  --publish 127.0.0.1:3777:3777 \
+  --env-file .env \
+  --volume "$PWD/bridge/config.json:/app/bridge/config.json:ro" \
+  ghcr.io/cnprobe/chicken-vps-bridge:latest
+```
+
+注意：
+
+- 私有 Komari 配置中要保留 `"kind": "komari"`，不要改成 `auto`；
+- `KOMARI_API_KEY` 填原始 Key，不要填管理员用户名和密码；
+- 不同版本的 Komari API Key 菜单名称可能不同；
+- API Key 相当于服务端凭据，当前 Komari 版本的 API Key 可能拥有较高权限；
+- 不要把 `.env` 提交到 Git；
+- 不要把 API Key 写入 `komari-theme.json`、主题 ZIP 或 `bridge_url`；
+- 怀疑泄露时立即在 Komari 后台撤销并重新生成；
+- 公共 Komari 不需要这个配置，保持 `.env` 不填即可。
+
+**重要：API Key 只解决 Bridge 读取私有 Komari 的认证问题，不会让 Bridge 本身变成私有服务。** 当前 Bridge 的 WebSocket 只有 Origin 校验，没有 Komari 账号登录认证。任何能访问 `wss://.../ws` 的人，只要通过 Origin 白名单，都可能看到节点统计。
+
+如果 Komari 数据必须保密，请同时把 Bridge 放在以下任一边界内：
+
+- VPN/内网；
+- 带认证的反向代理；
+- Cloudflare Access 等身份认证网关；
+- 仅管理员可访问的独立端口。
+
+不要仅因为 Bridge 使用了 API Key，就把它的 WebSocket 公开到互联网。
+
+## 主题设置中可以调整什么
+
+以下非敏感选项放在 Komari 的主题设置中，打开主题后可以直接修改：
+
+| 设置 | 作用 |
+| --- | --- |
+| `probe_limit` | 随机显示多少台 Komari 小鸡；例如填 `10` 就随机保留 10 台，填 `0` 表示使用 Bridge 的 `maxProbeChicks` 上限 |
+| `probe_order` | `随机` 保持一批稳定的随机小鸡；`按名称` 按节点名称排序后取前 N 台 |
+| `player_name` | 默认访客名字 |
+| `label_mode` | 完整、精简或关闭鸡名牌 |
+| `sound_enabled` | 是否启用互动音效 |
+| `show_controls` | 是否显示操作提示 |
+| `bridge_url` | 公开的 Bridge WebSocket 地址 |
+
+随机选择会在节点仍然存在时保持稳定，不会每 15 秒重新洗牌；节点消失、重新出现或修改数量/排序时才重新选择。Bridge 会定期从 Komari 的公开设置接口读取 `probe_limit` 和 `probe_order`，所以在 Komari 后台修改后通常在一个轮询周期内生效，客户端不能通过伪造消息抬高数量。
+
+以下内容不能放在主题设置中：
+
+- `KOMARI_API_KEY`、管理员 Key、Agent Token；
+- Komari 私有源 URL 和 `allowedOrigins`；
+- Bridge 端口、轮询间隔、代理信任和 GeoIP 外联设置；
+- `maxPlayers`、`maxNpcEntities`、握手限流等服务端资源限制。
+
+原因是主题设置会通过公开接口提供给浏览器；即使 Bridge 不信任客户端消息，也不应该把秘密放进主题设置。`probe_limit` 只是显示偏好，Bridge 会把它限制在服务端 `maxProbeChicks` 以内。
 
 ---
 
@@ -467,6 +564,48 @@ curl http://127.0.0.1:3777/health
 4. `allowedOrigins` 是否是实际 Komari 页面 Origin；
 5. Bridge 容器是否能访问 Komari 域名；
 6. Komari 的 `/api/nodes` 和 `/api/rpc2` 是否可从服务器访问。
+
+### 常见错误：`探针源1:unauthorized`
+
+这个错误表示 Bridge 读取你配置的 Komari 数据源时，被对方返回了认证失败或拒绝访问。它通常对应 HTTP `401`、`403`，或响应内容中包含 `Unauthorized`、`forbidden`、`token` 等文字。
+
+这不是浏览器 WebSocket 的 `allowedOrigins` 错误，也不是 Komari 主题 `bridge_url` 填错。
+
+先在服务器上测试 Komari 的公开节点接口：
+
+```bash
+curl -i https://monitor.example.com/api/nodes
+```
+
+正常情况下应返回 HTTP `200`，并且响应中包含 `data` 数组。
+
+如果返回 `401` 或 `403`，常见原因是：
+
+- Komari 管理面板或反向代理启用了登录认证；
+- Cloudflare/WAF/API Gateway 拦截了 Bridge 服务器 IP；
+- `/api/nodes` 或 `/api/rpc2` 只允许登录用户访问；
+- 配置的 URL 实际指向了登录页面、防护页面或错误的面板地址。
+
+本项目的 Komari 适配器只使用公开 Guest API，**不读取 Komari 管理员 API Key**。因此不要把管理员 Key 写进 `bridge/config.json` 或主题设置。可以选择：
+
+1. 让 Bridge 使用的 Komari 公开 API 可访问；
+2. 在 Cloudflare/WAF 中只针对 `/api/nodes` 和 `/api/rpc2` 放行 Bridge 服务器；
+3. 使用一个不需要登录的 Komari 公共面板；
+4. 如果必须使用完全私有的 Komari API，需要另外开发服务端认证适配器，不要把凭据放进 Komari 主题。
+
+还要从 Bridge 容器内部测试，因为宿主机能访问不代表容器能访问：
+
+```bash
+docker exec chicken-vps-bridge node -e "fetch('https://monitor.example.com/api/nodes').then(async r => console.log(r.status, (await r.text()).slice(0, 200))).catch(e => console.error(e.message))"
+```
+
+判断方式：
+
+- 返回 `401/403`：是认证、防护或权限问题；
+- 返回 `404`：URL 路径或 Komari 版本不匹配；
+- 返回 `200` 但没有 `data`：不是可识别的 Komari 节点接口；
+- 宿主机成功、容器失败：检查 Docker DNS、出口网络、代理和防火墙；
+- 容器也返回 `200` 且有 `data`：再检查 `kind`、配置文件挂载和 Bridge 日志。
 
 ### 6. 修改配置和更新镜像
 
@@ -621,7 +760,7 @@ npm run package
 
 ```text
 release/ChickenFarm-0.1.1.zip
-SHA-256: 69d6125a495ac838eba461a4b7dc4a13cb14f656d425fead52517bc52e1f38d9
+SHA-256: 55699a38030bcd884e50259b18797fc025f8893d6998e86ebeb947dc3b5caa8a
 ```
 
 ZIP 只包含主题静态资源和清单，不包含：

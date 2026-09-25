@@ -11,6 +11,7 @@
 
 - 不要把 Komari 管理 API Key、Agent Token、探针 Token 或私有 URL 放进 Komari 主题设置；`/api/public` 会公开主题设置。
 - 探针凭据放在伴生服务的环境变量或权限为 `0600` 的配置文件中，推荐使用 Docker/主机 secret manager。
+- 私有 Komari 可以使用服务端 `KOMARI_API_KEY`，但只能放在 Bridge 的 `.env`/Secret 中；不要放入主题设置、主题 ZIP 或浏览器可读配置。该 Key 可能拥有较高权限，应限制保存位置并定期轮换。
 - 浏览器的短期游戏恢复令牌只放在当前标签页的 `sessionStorage`，并绑定到取得它的 bridge Origin；它不是管理凭据。
 - 生产 WebSocket 必须使用 `wss://`，并通过 HTTPS 反向代理提供。
 

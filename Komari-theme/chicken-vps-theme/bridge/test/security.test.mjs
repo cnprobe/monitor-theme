@@ -129,6 +129,7 @@ test('apiBase extraction and source tokenEnv resolution are pure helpers', () =>
   const source = { url: 'https://panel.example.test', tokenEnv: 'PANEL_TOKEN' };
   assert.equal(resolveSourceToken(source, { PANEL_TOKEN: 'secret' }), 'secret');
   assert.equal(resolveSource(source, { PANEL_TOKEN: 'secret' }).token, 'secret');
+  assert.equal(resolveSource({ kind: 'komari', tokenEnv: 'KOMARI_API_KEY' }, { KOMARI_API_KEY: 'raw-key' }).token, 'Bearer raw-key');
   assert.equal(source.token, undefined);
   assert.equal(isSameOrigin('https://example.test/path', 'https://example.test/other'), true);
 });

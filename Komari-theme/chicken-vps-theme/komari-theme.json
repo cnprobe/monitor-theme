@@ -33,6 +33,33 @@
         }
       },
       {
+        "key": "probe_limit",
+        "name": {
+          "zh-CN": "显示小鸡数量",
+          "en": "Displayed chicken count"
+        },
+        "type": "number",
+        "default": 10,
+        "help": {
+          "zh-CN": "设置随机显示多少台 Komari 节点；填 0 表示使用 Bridge 服务端上限，超过服务端 maxProbeChicks 时会被自动限制。",
+          "en": "Randomly display this many Komari nodes. Use 0 for the Bridge server limit; values above maxProbeChicks are capped."
+        }
+      },
+      {
+        "key": "probe_order",
+        "name": {
+          "zh-CN": "小鸡选择方式",
+          "en": "Chicken selection"
+        },
+        "type": "select",
+        "options": "随机,按名称",
+        "default": "随机",
+        "help": {
+          "zh-CN": "随机：保持一批稳定随机小鸡；按名称：按节点名称排序后取前 N 台。",
+          "en": "Random keeps a stable random subset; name selects the first N nodes sorted by name."
+        }
+      },
+      {
         "key": "player_name",
         "name": {
           "zh-CN": "默认访客名字",

@@ -1,5 +1,5 @@
-# 只使用 Komari 时不需要 Token。可以复制 .env.example 为 .env，
-# 用来设置 DOCKER_UID/DOCKER_GID、BRIDGE_PORT 等 Compose 变量。
+# 公开 Komari 不需要 Token；私有 Komari 可选填 KOMARI_API_KEY。
+# 可以复制 .env.example 为 .env，用来设置 UID/GID、端口和私有 API Key。
 # bridge/config.json 仍通过只读 bind mount 单独挂载。
 services:
   chicken-bridge:
@@ -15,6 +15,7 @@ services:
       # Komari-only 不需要以下 Token；保留映射是为了兼容其他适配器。
       SERVER_STATUS_TOKEN: "${SERVER_STATUS_TOKEN:-}"
       NEZHA_TOKEN: "${NEZHA_TOKEN:-}"
+      KOMARI_API_KEY: "${KOMARI_API_KEY:-}"
       TRUST_PROXY: "${TRUST_PROXY:-}"
     volumes:
       - type: bind

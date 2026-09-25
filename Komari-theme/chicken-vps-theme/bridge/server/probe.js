@@ -15,6 +15,7 @@
 // 名牌只显示"名字 + 离线"，让玩家一眼看出哪台机器挂了。
 
 import { readAll, flatten } from './probe/reader.js';
+import { readThemeSettings as readKomariThemeSettings } from './probe/adapters/komari.js';
 import { readResponseText } from './probe/http.js';
 import { resolveProbeSecurity } from './security.js';
 
@@ -122,6 +123,9 @@ export function resolveSource(source, env = process.env) {
   const out = { ...source };
   const token = resolveSourceToken(source, env);
   if (token !== undefined) out.token = token;
+  if (source.kind === 'komari' && typeof out.token === 'string' && out.token && !/^Bearer\s/i.test(out.token)) {
+    out.token = `Bearer ${out.token}`;
+  }
   return out;
 }
 
@@ -151,6 +155,22 @@ export class Probe {
     this.onSitesUpdate = null;
     this.onHealth = null;
     this.pending = false;
+  }
+
+  async fetchThemeSettings() {
+    const source = this.sources.find(item => item?.kind === 'komari')
+      || (this.sources.length === 1 ? this.sources[0] : null);
+    if (!source) return null;
+    const resolved = resolveSource(source);
+    const headers = { ...(resolved.headers || {}) };
+    if (resolved.token && !Object.keys(headers).some(key => key.toLowerCase() === 'authorization')) {
+      headers.Authorization = resolved.token;
+    }
+    const url = resolved.url || resolved.endpoint || resolved.base;
+    return readKomariThemeSettings(url, {
+      headers,
+      ms: Math.min(Math.max(this.intervalMs || 15000, 5000), 15000),
+    });
   }
 
   start() {
@@ -206,7 +226,11 @@ export class Probe {
     try {
       // 每个源独立并发读取，单站超时/失败不影响其它站（readAll 内部已隔离）。
       // tokenEnv 在轮询时解析，既支持运行时注入环境变量，也不会把密钥写回配置对象。
-      const sources = this.sources.map(s => ({ ...resolveSource(s), ...this.passOpts(s) }));
+      const sources = this.sources.map(s => {
+        const resolved = resolveSource(s);
+        const options = this.passOpts(s);
+        return { ...resolved, ...options, token: resolved.token ?? options.token };
+      });
       const out = await readAll(sources, { security: this.security });
 
       this.perSite = out.map((r, i) => ({

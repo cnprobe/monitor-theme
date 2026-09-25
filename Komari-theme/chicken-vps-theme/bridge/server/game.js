@@ -21,6 +21,8 @@ const N_COLORS = 5;
 // 全放大。MAX_SOCKETS 是「握手中+已连接」的硬顶，比 players 上限更早拦截半开连接。
 const MAX_PLAYERS = 60;   // 在场玩家人数上限（config.json 的 maxPlayers 可覆盖）
 const MAX_SOCKETS = 200;  // ws 侧连接硬顶（含还没走完 onConnection 的）
+const DEFAULT_PROBE_LIMIT = 10;
+const MAX_THEME_PROBE_LIMIT = 1000;
 const MAX_WS_BUFFERED_BYTES = 1_000_000;
 
 // 自定义资料（2026-09-21）：玩家可改名字。换图标功能已移除（第二十九轮），
@@ -90,6 +92,12 @@ export class Game {
     this.maxPlayers = Math.min(MAX_SOCKETS, Math.max(1, Number(serverCfg.maxPlayers) || MAX_PLAYERS));
     this.maxProbeChicks = Math.min(1000, Math.max(1, Number(serverCfg.maxProbeChicks) || 200));
     this.maxNpcEntities = Math.min(2000, Math.max(1, Number(serverCfg.maxNpcEntities) || 500));
+    this.probeLimit = DEFAULT_PROBE_LIMIT;
+    this.probeOrder = 'random';
+    this.selectedProbeKeys = { chick: [], web: [] };
+    this.lastProbeList = [];
+    this.lastSiteList = [];
+    this.lastThemeSettingsError = null;
     this.exposeVisitorGeo = serverCfg.exposeVisitorGeo === true;
     this.players = new Map();
     this.pendingPlayers = 0;
@@ -130,10 +138,16 @@ export class Game {
     const pcfg = this.cfg.probe || {};
     const hasSources = Array.isArray(pcfg.sources) ? pcfg.sources.length > 0 : !!pcfg.sources;
     this.probe = new Probe(hasSources ? pcfg.sources : pcfg.url, pcfg.interval, pcfg.sites, pcfg);
-    this.probe.onUpdate = (list) => this.syncProbeChicks('chick', list, s => s);
-    this.probe.onSitesUpdate = (list) => this.syncProbeChicks('web', list, s => ({
-      site: true, region: s.region, latency: s.latency, online: s.online, err: s.err || null
-    }));
+    this.probe.onUpdate = (list) => {
+      this.lastProbeList = Array.isArray(list) ? list : [];
+      this.syncProbeChicks('chick', this.lastProbeList, s => s);
+    };
+    this.probe.onSitesUpdate = (list) => {
+      this.lastSiteList = Array.isArray(list) ? list : [];
+      this.syncProbeChicks('web', this.lastSiteList, s => ({
+        site: true, region: s.region, latency: s.latency, online: s.online, err: s.err || null
+      }));
+    };
     this.probe.onHealth = (h) => {
       this.probeHealth = h;
       // 探针挂了要让场内玩家看得见，而不是数据静默停在旧值
@@ -141,6 +155,11 @@ export class Game {
     };
     this.probeHealth = { ok: true, error: null, sources: [] };
     this.probe.start();
+    this.themeSettingsTimer = setInterval(() => {
+      void this.refreshThemeSettings();
+    }, 15000);
+    this.themeSettingsTimer.unref?.();
+    void this.refreshThemeSettings();
   }
 
   // ---- 连接生命周期 ------------------------------------------------------
@@ -391,15 +410,113 @@ export class Game {
 
   // ---- 探针小鸡 ----------------------------------------------------------
 
+  async refreshThemeSettings() {
+    try {
+      const result = await this.probe.fetchThemeSettings();
+      if (result?.ok) {
+        this.lastThemeSettingsError = null;
+        this.setProbePreferences(result.settings);
+      } else if (result?.error && result.error !== this.lastThemeSettingsError) {
+        this.lastThemeSettingsError = result.error;
+        console.log('[theme] 读取主题设置失败:', result.error);
+      }
+    } catch (error) {
+      // 主题设置读取失败不影响 Komari 探针轮询；保留上一次显示偏好。
+      if (error.message !== this.lastThemeSettingsError) {
+        this.lastThemeSettingsError = error.message;
+        console.log('[theme] 读取主题设置失败:', error.message);
+      }
+    }
+  }
+
+  setProbePreferences(message) {
+    const raw = Number(message?.probeLimit ?? message?.probe_limit);
+    const limit = Number.isFinite(raw)
+      ? Math.max(0, Math.min(MAX_THEME_PROBE_LIMIT, Math.floor(raw)))
+      : this.probeLimit;
+    const requestedOrder = message?.probeOrder ?? message?.probe_order;
+    const order = requestedOrder === 'name' || requestedOrder === '按名称'
+      ? 'name'
+      : 'random';
+    if (limit === this.probeLimit && order === this.probeOrder) return;
+    const orderChanged = order !== this.probeOrder;
+    this.probeLimit = limit;
+    this.probeOrder = order;
+    if (orderChanged) this.selectedProbeKeys = { chick: [], web: [] };
+    // 立即重算，不必等下一轮探针轮询。
+    if (this.lastProbeList.length) this.syncProbeChicks('chick', this.lastProbeList, s => s);
+    if (this.lastSiteList.length) {
+      this.syncProbeChicks('web', this.lastSiteList, s => ({
+        site: true, region: s.region, latency: s.latency, online: s.online, err: s.err || null
+      }));
+    }
+  }
+
+  probeItemKey(item) {
+    return String(item?.key || item?.url || item?.name || '').slice(0, 256);
+  }
+
+  selectProbeItems(type, source, available) {
+    const hardMax = Math.min(this.maxProbeChicks, Math.max(0, available));
+    if (!hardMax || !source.length) {
+      this.selectedProbeKeys[type] = [];
+      return [];
+    }
+    const requested = this.probeLimit > 0 ? this.probeLimit : this.maxProbeChicks;
+    const limit = Math.min(hardMax, requested);
+    if (this.probeOrder === 'name') {
+      const sorted = source.slice().sort((a, b) => {
+        const an = String(a?.name || a?.key || a?.url || '');
+        const bn = String(b?.name || b?.key || b?.url || '');
+        return an.localeCompare(bn, 'zh-CN');
+      });
+      const selected = sorted.slice(0, limit);
+      this.selectedProbeKeys[type] = selected.map(item => this.probeItemKey(item));
+      return selected;
+    }
+
+    const byKey = new Map();
+    for (const item of source) {
+      const key = this.probeItemKey(item);
+      if (key && !byKey.has(key)) byKey.set(key, item);
+    }
+    const selected = [];
+    const selectedKeys = new Set();
+    for (const key of this.selectedProbeKeys[type] || []) {
+      const item = byKey.get(key);
+      if (item && selected.length < limit && !selectedKeys.has(key)) {
+        selected.push(item);
+        selectedKeys.add(key);
+      }
+    }
+    const remaining = [...byKey.values()].filter(item => !selectedKeys.has(this.probeItemKey(item)));
+    for (let i = remaining.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+    }
+    for (const item of remaining) {
+      if (selected.length >= limit) break;
+      const key = this.probeItemKey(item);
+      if (key && !selectedKeys.has(key)) {
+        selected.push(item);
+        selectedKeys.add(key);
+      }
+    }
+    this.selectedProbeKeys[type] = selected.map(item => this.probeItemKey(item));
+    return selected;
+  }
+
   // 同步探针小鸡（type: 'chick' VPS机器 / 'web' 网站）。
   // 离线的条目不再被移除，而是留在场上进入"倒地不可选中"状态。
   syncProbeChicks(type, list, toStats) {
     const source = Array.isArray(list) ? list : [];
     const otherEntities = [...this.npcs].filter(entity => entity.type !== type).length;
     const available = Math.max(0, this.maxNpcEntities - otherEntities);
-    const visible = source
-      .filter(item => item && typeof item === 'object')
-      .slice(0, Math.min(this.maxProbeChicks, available));
+    const visible = this.selectProbeItems(
+      type,
+      source.filter(item => item && typeof item === 'object'),
+      available
+    );
     for (const [id, n] of [...this.npcs]) {
       // 只有彻底从探针列表里消失（配置删除了这条）才真正离场
       if (n.type === type && !visible.some(s => String(s.key) === n.probeKey)) {
