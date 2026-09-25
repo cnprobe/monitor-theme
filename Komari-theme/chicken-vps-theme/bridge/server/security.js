@@ -185,6 +185,8 @@ export function withoutRemoteCredentials(options = {}) {
   delete out.token;
   delete out.apiToken;
   delete out.tokenEnv;
+  delete out.shareKey;
+  delete out.shareUrlEnv;
   delete out.authorization;
   if (Object.prototype.hasOwnProperty.call(out, 'headers')) {
     out.headers = stripAuthorizationHeaders(out.headers);

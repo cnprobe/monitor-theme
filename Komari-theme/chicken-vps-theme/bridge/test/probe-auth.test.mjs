@@ -4,6 +4,7 @@ import http from 'node:http';
 import { WebSocketServer } from 'ws';
 
 import { readProbe } from '../server/probe/reader.js';
+import { readThemeSettings } from '../server/probe/adapters/komari.js';
 
 test('explicit adapters receive the configured source token on their second read', async () => {
   let authorization;
@@ -59,6 +60,60 @@ test('Komari adapter forwards a private API key to REST fallback', async () => {
   }
 });
 
+test('Komari theme settings can be read with a temporary share cookie', async () => {
+  let cookie;
+  const server = http.createServer((request, response) => {
+    cookie = request.headers.cookie;
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ data: { theme_settings: { probe_limit: 10 } } }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const result = await readThemeSettings(`http://127.0.0.1:${port}`, {
+      shareKey: 'b1w3hcra',
+      ms: 1000,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.settings.probe_limit, 10);
+    assert.equal(cookie, 'temp_key=b1w3hcra');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Komari adapter forwards a temporary share cookie to REST fallback', async () => {
+  let cookie;
+  const server = http.createServer((request, response) => {
+    if (request.url === '/api/nodes') {
+      cookie = request.headers.cookie;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        status: 'success',
+        data: [{ uuid: 'node-1', name: 'Node 1', mem_total: 1024 }],
+      }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  server.on('upgrade', (_request, socket) => socket.destroy());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const result = await readProbe(`http://127.0.0.1:${port}`, {
+      kind: 'komari',
+      shareKey: 'b1w3hcra',
+      ms: 1000,
+      wsMs: 100,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(cookie, 'temp_key=b1w3hcra');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Komari adapter forwards a private API key to the live RPC WebSocket', async () => {
   let authorization;
   const server = http.createServer((_request, response) => {
@@ -93,6 +148,46 @@ test('Komari adapter forwards a private API key to the live RPC WebSocket', asyn
     assert.equal(result.ok, true);
     assert.equal(result.transport, 'ws');
     assert.equal(authorization, 'Bearer private-api-key');
+  } finally {
+    await new Promise(resolve => wss.close(resolve));
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Komari adapter forwards a temporary share cookie to the live RPC WebSocket', async () => {
+  let cookie;
+  const server = http.createServer((_request, response) => {
+    response.statusCode = 404;
+    response.end();
+  });
+  const wss = new WebSocketServer({ server, path: '/api/rpc2' });
+  wss.on('connection', (socket, request) => {
+    cookie = request.headers.cookie;
+    socket.on('message', data => {
+      const calls = JSON.parse(data.toString());
+      const list = Array.isArray(calls) ? calls : [calls];
+      const responses = list.map(call => ({
+        jsonrpc: '2.0',
+        id: call.id,
+        result: call.method === 'common:getNodes'
+          ? { 'node-1': { uuid: 'node-1', name: 'Node 1', mem_total: 1024 } }
+          : { 'node-1': { client: 'node-1', cpu: 1, ram: 512, ram_total: 1024 } },
+      }));
+      socket.send(JSON.stringify(Array.isArray(calls) ? responses : responses[0]));
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const result = await readProbe(`http://127.0.0.1:${port}`, {
+      kind: 'komari',
+      shareKey: 'b1w3hcra',
+      ms: 2000,
+      wsMs: 1000,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.transport, 'ws');
+    assert.equal(cookie, 'temp_key=b1w3hcra');
   } finally {
     await new Promise(resolve => wss.close(resolve));
     await new Promise(resolve => server.close(resolve));

@@ -16,7 +16,7 @@ import {
   withoutRemoteCredentials,
 } from '../server/security.js';
 import { extractApiBases, readProbe } from '../server/probe/reader.js';
-import { resolveSource, resolveSourceToken } from '../server/probe.js';
+import { resolveSource, resolveSourceShareKey, resolveSourceToken } from '../server/probe.js';
 
 test('origin allowlist matches normalized exact origins only', () => {
   const allowed = normalizeAllowedOrigins(['https://Example.test/', 'http://localhost:3777']);
@@ -65,6 +65,8 @@ test('cross-origin options remove credentials without mutating the source', () =
     token: 'Bearer secret',
     apiToken: 'api-secret',
     tokenEnv: 'TOKEN_ENV',
+    shareKey: 'share-secret',
+    shareUrlEnv: 'SHARE_URL_ENV',
     headers: {
       Authorization: 'Bearer header-secret',
       'X-Trace': 'ok',
@@ -75,6 +77,8 @@ test('cross-origin options remove credentials without mutating the source', () =
   assert.equal(safe.token, undefined);
   assert.equal(safe.apiToken, undefined);
   assert.equal(safe.tokenEnv, undefined);
+  assert.equal(safe.shareKey, undefined);
+  assert.equal(safe.shareUrlEnv, undefined);
   assert.deepEqual(safe.headers, { Accept: 'application/json' });
   assert.equal(source.headers.Authorization, 'Bearer header-secret');
   assert.deepEqual(stripAuthorizationHeaders({ authorization: 'x', 'x-test': 'y', Accept: 'ok' }), { Accept: 'ok' });
@@ -115,10 +119,30 @@ test('trusted proxy list rejects malformed and unsupported CIDRs', () => {
   assert.throws(() => validateTrustedProxyCidrs(['10.0.0.0/33']), /between 0 and 32/);
 });
 
+test('temporary share URLs are reduced to a same-origin temp_key without mutating config', () => {
+  const source = {
+    url: 'https://komari.example.com',
+    kind: 'komari',
+    shareUrlEnv: 'KOMARI_SHARE_URL',
+  };
+  const env = {
+    KOMARI_SHARE_URL: 'https://komari.example.com/?temp_key=b1w3hcra',
+  };
+  assert.equal(resolveSourceShareKey(source, env), 'b1w3hcra');
+  assert.equal(resolveSource(source, env).shareKey, 'b1w3hcra');
+  assert.equal(resolveSourceShareKey(source, {
+    KOMARI_SHARE_URL: 'https://evil.example.com/?temp_key=stolen',
+  }), undefined);
+  assert.equal(source.shareKey, undefined);
+});
+
 test('credentials are refused for non-loopback plaintext HTTP probes', async () => {
   const result = await readProbe('http://status.example.test', { token: 'secret' });
   assert.equal(result.ok, false);
   assert.match(result.error, /HTTPS/);
+  const shareResult = await readProbe('http://status.example.test', { shareKey: 'share-secret' });
+  assert.equal(shareResult.ok, false);
+  assert.match(shareResult.error, /HTTPS/);
 });
 
 test('apiBase extraction and source tokenEnv resolution are pure helpers', () => {

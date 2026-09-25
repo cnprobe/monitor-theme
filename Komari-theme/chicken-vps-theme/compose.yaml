@@ -1,5 +1,5 @@
-# 公开 Komari 不需要 Token；私有 Komari 可选填 KOMARI_API_KEY。
-# 可以复制 .env.example 为 .env，用来设置 UID/GID、端口和私有 API Key。
+# 公开 Komari 不需要 Token；私有 Komari 可选填 KOMARI_API_KEY 或 KOMARI_SHARE_URL。
+# 可以复制 .env.example 为 .env，用来设置 UID/GID、端口和私有认证。
 # bridge/config.json 仍通过只读 bind mount 单独挂载。
 services:
   chicken-bridge:
@@ -16,6 +16,7 @@ services:
       SERVER_STATUS_TOKEN: "${SERVER_STATUS_TOKEN:-}"
       NEZHA_TOKEN: "${NEZHA_TOKEN:-}"
       KOMARI_API_KEY: "${KOMARI_API_KEY:-}"
+      KOMARI_SHARE_URL: "${KOMARI_SHARE_URL:-}"
       TRUST_PROXY: "${TRUST_PROXY:-}"
     volumes:
       - type: bind

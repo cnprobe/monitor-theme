@@ -85,6 +85,15 @@ async function fetchSameOrigin(url, { ms, headers, body, method }) {
   throw new Error('重定向次数过多');
 }
 
+/** 将临时分享令牌作为 Cookie 加到同源请求头；不覆盖调用方显式 Cookie。 */
+export function withTempShareCookie(headers = {}, shareKey) {
+  const out = { ...(headers && typeof headers === 'object' ? headers : {}) };
+  if (typeof shareKey !== 'string' || !shareKey || shareKey.length > 512 || /[\u0000-\u0020\u007f;]/.test(shareKey)) return out;
+  if (Object.keys(out).some(key => String(key).toLowerCase() === 'cookie')) return out;
+  out.Cookie = `temp_key=${shareKey}`;
+  return out;
+}
+
 export async function fetchJson(url, { ms = 10000, headers = {}, body, method = 'GET' } = {}) {
   const t0 = Date.now();
   let res;

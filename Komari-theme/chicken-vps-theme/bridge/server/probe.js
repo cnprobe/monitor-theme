@@ -116,6 +116,31 @@ export function resolveSourceToken(source, env = process.env) {
 // 简短别名，便于运维脚本/测试调用；实际轮询使用上面的明确名称。
 export const resolveTokenEnv = resolveSourceToken;
 
+/**
+ * 从服务端环境变量中的临时分享链接提取 temp_key。
+ * 分享链接本身不进入 source.url，也不出现在探针健康摘要或日志中。
+ */
+export function resolveSourceShareKey(source, env = process.env) {
+  if (!source || typeof source !== 'object' || (source.kind && source.kind !== 'komari') || typeof source.shareUrlEnv !== 'string' || !source.shareUrlEnv.trim()) {
+    return undefined;
+  }
+  if (!env || !Object.prototype.hasOwnProperty.call(env, source.shareUrlEnv)) return undefined;
+  const raw = env[source.shareUrlEnv];
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  let share;
+  let base;
+  try {
+    share = new URL(raw.trim());
+    base = new URL(source.url || source.endpoint || source.base);
+  } catch {
+    return undefined;
+  }
+  if (!['http:', 'https:'].includes(share.protocol) || share.origin !== base.origin) return undefined;
+  const key = share.searchParams.get('temp_key');
+  if (typeof key !== 'string' || !key || key.length > 512 || /[\u0000-\u0020\u007f;]/.test(key)) return undefined;
+  return key;
+}
+
 /** 返回带已解析 token 的 source 副本，避免把环境变量值写回 config。 */
 export function resolveSource(source, env = process.env) {
   if (typeof source === 'string') return { url: source };
@@ -123,6 +148,8 @@ export function resolveSource(source, env = process.env) {
   const out = { ...source };
   const token = resolveSourceToken(source, env);
   if (token !== undefined) out.token = token;
+  const shareKey = resolveSourceShareKey(source, env);
+  if (shareKey !== undefined) out.shareKey = shareKey;
   if (source.kind === 'komari' && typeof out.token === 'string' && out.token && !/^Bearer\s/i.test(out.token)) {
     out.token = `Bearer ${out.token}`;
   }
@@ -169,6 +196,7 @@ export class Probe {
     const url = resolved.url || resolved.endpoint || resolved.base;
     return readKomariThemeSettings(url, {
       headers,
+      shareKey: resolved.shareKey,
       ms: Math.min(Math.max(this.intervalMs || 15000, 5000), 15000),
     });
   }
@@ -208,6 +236,7 @@ export class Probe {
     return {
       ms: s.timeout ?? undefined,
       token: resolveSourceToken(s),
+      shareKey: resolveSourceShareKey(s),
       kind: s.kind ?? undefined,
       totalMs: s.totalMs ?? undefined,
       backendMs: s.backendMs ?? undefined,
@@ -229,7 +258,7 @@ export class Probe {
       const sources = this.sources.map(s => {
         const resolved = resolveSource(s);
         const options = this.passOpts(s);
-        return { ...resolved, ...options, token: resolved.token ?? options.token };
+        return { ...resolved, ...options, token: resolved.token ?? options.token, shareKey: resolved.shareKey ?? options.shareKey };
       });
       const out = await readAll(sources, { security: this.security });
 

@@ -8,7 +8,7 @@
     "zh-CN": "把 Komari 节点变成 3D 小鸡，并支持访客在线互啄的 companion 主题。",
     "en": "A Komari companion theme that turns nodes into 3D chickens and supports multiplayer pecking."
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Komari Community",
   "url": "https://github.com/komari-monitor/komari-document",
   "preview": "preview.svg",

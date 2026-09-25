@@ -82,10 +82,24 @@ chmod 600 bridge/config.json
 这份配置同时覆盖公开和私有 Komari：
 
 - 公开 Komari：可以删除 `tokenEnv`，也不需要创建 `.env`；
-- 私有 Komari：保留 `tokenEnv`，并在 Bridge 服务端的 `.env` 中填写 `KOMARI_API_KEY`；
+- 私有 Komari：保留 `tokenEnv` 并在 `.env` 填写 `KOMARI_API_KEY`，或改用 `shareUrlEnv` 填写临时分享链接；
 - `kind` 必须保持为 `komari`，Bridge 会自动读取 `/api/nodes` 和 `/api/rpc2`；
 - `allowedOrigins` 填 Komari 页面 Origin，不要添加 `/ws` 或 `/api` 路径；
 - 其他未写出的资源限制会使用默认值。
+
+如果你使用的是临时分享链接而不是 API Key，把上面源配置中的这一行：
+
+```jsonc
+"tokenEnv": "KOMARI_API_KEY", // API Key 模式
+```
+
+替换为：
+
+```jsonc
+"shareUrlEnv": "KOMARI_SHARE_URL", // 临时分享链接模式
+```
+
+两种认证方式二选一，不要同时填写。临时分享链接模式下，Bridge 会从 `.env` 读取完整链接，提取 `temp_key`，并以 Cookie 方式请求 Komari；不会把分享链接放进 `url` 或主题设置。
 
 ### 3. 每个 Komari 配置项是什么意思
 
@@ -224,6 +238,8 @@ Komari 数据轮询间隔，单位是**毫秒**：
 | `name` | 显示名称，随便写，例如 `我的 Komari` |
 | `url` | Komari 面板根地址，例如 `https://monitor.example.com` |
 | `kind` | 固定写 `komari` |
+| `tokenEnv` | API Key 模式填写，例如 `KOMARI_API_KEY` |
+| `shareUrlEnv` | 临时分享模式填写，例如 `KOMARI_SHARE_URL`；值从 `.env` 读取完整分享链接 |
 | `timeout` | 单次请求/读取预算，单位毫秒；`12000` 表示 12 秒 |
 
 `url` 填 Komari 根地址即可，不要手动填写：
@@ -240,7 +256,7 @@ Bridge 会自动访问 Komari 的公开接口：
 /api/rpc2
 ```
 
-公开 Komari 不需要填写 `tokenEnv`、`headers` 或管理员 API Key；私有 Komari 保留 `tokenEnv`，API Key 只放在 Bridge 服务端 `.env` 中。
+公开 Komari 不需要填写 `tokenEnv`、`shareUrlEnv`、`headers` 或认证信息；私有 Komari 使用 `tokenEnv` 或 `shareUrlEnv`，认证信息只放在 Bridge 服务端 `.env` 中。
 
 如果你的 Komari 完全关闭了公开接口、需要登录或使用非标准魔改接口，Bridge 可能读不到数据；这种情况不是配置 Token 就能解决的。
 
@@ -335,30 +351,58 @@ DOCKER_GID=1000
 # TRUST_PROXY=1
 ```
 
-不要把 Komari 管理员 Key、Agent Token 或其他秘密放进主题设置或 `komari-theme.json`。私有 Komari 的 API Key 如果使用，只能保存在 Bridge 服务器的 `.env` 或其他服务端 Secret 中。
+不要把 Komari 管理员 Key、Agent Token、临时分享链接或其他秘密放进主题设置或 `komari-theme.json`。私有 Komari 的认证信息只能保存在 Bridge 服务器的 `.env` 或其他服务端 Secret 中。
 
-### 私有 Komari 的 API Key
+### 私有 Komari 的服务端认证
 
-上面的完整最小配置已经包含私有 Komari 所需的 `tokenEnv`。如果你的 Komari 开启了“私有站点”，只需要在 Bridge 服务器创建 `.env`：
+如果你的 Komari 开启了“私有站点”，先在 Bridge 服务器创建 `.env`：
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-然后填写 Komari 后台生成的原始 API Key：
+#### 方式一：API Key（长期运行推荐）
+
+上面的完整最小配置中的：
+
+```jsonc
+"tokenEnv": "KOMARI_API_KEY"
+```
+
+表示从 `.env` 读取原始 API Key：
 
 ```dotenv
 KOMARI_API_KEY=这里填写原始APIKey
 ```
 
-Bridge 会自动发送：
+Bridge 会发送：
 
 ```text
 Authorization: Bearer <KOMARI_API_KEY>
 ```
 
-私有模式下，Bridge 读取 `/api/public` 中的主题设置时也会使用同一个服务端 Key；Key 不会返回给浏览器，也不会写入主题 ZIP。
+#### 方式二：临时分享链接（短期测试可用）
+
+如果不使用 API Key，把配置中的 `tokenEnv` 替换为：
+
+```jsonc
+"shareUrlEnv": "KOMARI_SHARE_URL"
+```
+
+然后把完整分享链接写入 `.env`：
+
+```dotenv
+KOMARI_SHARE_URL=https://komari.example.com/?temp_key=b1w3hcra
+```
+
+Bridge 会在服务端提取 `temp_key`，并通过 Cookie 请求 REST、RPC WebSocket 和 `/api/public`。分享链接本身不会放入 `url`、主题设置或浏览器；链接过期后需要生成新链接、更新 `.env` 并重新创建容器。
+
+两种认证方式二选一，不要同时填写。私有 Komari 配置始终要保留：
+
+```json
+"kind": "komari"
+```
 
 使用私有配置时，Docker 命令必须带上环境文件：
 
@@ -375,13 +419,12 @@ docker run -d \
 
 注意：
 
-- 私有 Komari 配置中要保留 `"kind": "komari"` 和 `"tokenEnv": "KOMARI_API_KEY"`；
-- `KOMARI_API_KEY` 填原始 Key，不要填管理员用户名和密码；
-- API Key 相当于服务端凭据，当前 Komari 版本的 API Key 可能拥有较高权限；
+- API Key 模式填写 `KOMARI_API_KEY`，不要填管理员用户名和密码；
+- 临时分享模式填写完整的 `KOMARI_SHARE_URL`，分享链接过期后 Bridge 会显示探针认证失败；
 - 不要把 `.env` 提交到 Git；
-- 不要把 API Key 写入 `komari-theme.json`、主题 ZIP 或 `bridge_url`；
-- 怀疑泄露时立即在 Komari 后台撤销并重新生成；
-- 公开 Komari 可以删除 `tokenEnv`，并且不需要创建 `.env`。
+- 不要把 API Key 或分享链接写入 `komari-theme.json`、主题 ZIP 或 `bridge_url`；
+- 怀疑泄露时立即撤销 API Key 或重新生成分享链接；
+- 公开 Komari 不需要认证字段，也不需要创建 `.env`。
 
 **重要：API Key 只解决 Bridge 读取私有 Komari 的认证问题，不会让 Bridge 本身变成私有服务。** 当前 Bridge 的 WebSocket 只有 Origin 校验，没有 Komari 账号登录认证。任何能访问 `wss://.../ws` 的人，只要通过 Origin 白名单，都可能看到节点统计。
 
@@ -412,7 +455,7 @@ docker run -d \
 
 以下内容不能放在主题设置中：
 
-- `KOMARI_API_KEY`、管理员 Key、Agent Token；
+- `KOMARI_API_KEY`、`KOMARI_SHARE_URL`、管理员 Key、Agent Token；
 - Komari 私有源 URL 和 `allowedOrigins`；
 - Bridge 端口、轮询间隔、代理信任和 GeoIP 外联设置；
 - `maxPlayers`、`maxNpcEntities`、握手限流等服务端资源限制。
@@ -742,8 +785,8 @@ npm run package
 当前 ZIP：
 
 ```text
-release/ChickenFarm-0.1.1.zip
-SHA-256: 55699a38030bcd884e50259b18797fc025f8893d6998e86ebeb947dc3b5caa8a
+release/ChickenFarm-0.1.2.zip
+SHA-256: f6d139e2d136a3b0c7140f11e1305d955922e0ee0bdfb15e69f8540058d298b1
 ```
 
 ZIP 只包含主题静态资源和清单，不包含：
@@ -821,17 +864,17 @@ npm run build
 chicken-vps-bridge-v*
 ```
 
-例如发布 `0.1.1`：
+例如发布 `0.1.2`：
 
 ```bash
-git tag -a chicken-vps-bridge-v0.1.1 -m "Release Chicken VPS Bridge 0.1.1"
-git push origin chicken-vps-bridge-v0.1.1
+git tag -a chicken-vps-bridge-v0.1.2 -m "Release Chicken VPS Bridge 0.1.2"
+git push origin chicken-vps-bridge-v0.1.2
 ```
 
 只有推送这个 Tag 时才会：
 
 - 构建 `linux/amd64` 和 `linux/arm64` 镜像；
-- 推送 `ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.1.1`；
+- 推送 `ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.1.2`；
 - 更新 `ghcr.io/cnprobe/chicken-vps-bridge:latest`；
 - 生成构建证明、SBOM 和缓存。
 

@@ -1,6 +1,6 @@
 {
   "name": "chicken-vps-komari-theme-template",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "A clean Komari theme template adapted from Chicken VPS, with a companion authoritative game service.",

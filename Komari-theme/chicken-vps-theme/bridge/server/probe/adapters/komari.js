@@ -14,7 +14,7 @@
 //   REST `/api/nodes` 仍然保留为兜底：能给出机器清单，便于 WS 不可达时至少显示名字与在线状态。
 
 import { emptyNode, finalizeNode, clampCpu } from '../model.js';
-import { fetchJson, siteRoot } from '../http.js';
+import { fetchJson, siteRoot, withTempShareCookie } from '../http.js';
 import { num, normLoad, pick, uptimeToSec, toMs, normRegion, gb, bool } from '../normalize.js';
 import { RpcClient } from '../ws.js';
 
@@ -167,7 +167,7 @@ function normalizeAuthHeaders(headers) {
 
 export async function readThemeSettings(url, opts = {}) {
   const base = siteRoot(url);
-  const headers = normalizeAuthHeaders(opts.headers);
+  const headers = withTempShareCookie(normalizeAuthHeaders(opts.headers), opts.shareKey);
   const result = await fetchJson(`${base}/api/public`, {
     ms: opts.ms ?? 10000,
     headers,
@@ -185,7 +185,7 @@ export async function readThemeSettings(url, opts = {}) {
 
 export async function read(url, opts = {}) {
   const base = siteRoot(url);
-  const headers = normalizeAuthHeaders(opts.headers);
+  const headers = withTempShareCookie(normalizeAuthHeaders(opts.headers), opts.shareKey);
   let host = base;
   try { host = new URL(base).host; } catch { /* ignore */ }
   const rpcUrl = opts.rpcUrl || base.replace(/^http/, 'ws') + '/api/rpc2';

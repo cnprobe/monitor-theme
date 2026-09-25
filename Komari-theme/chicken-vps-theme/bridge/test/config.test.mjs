@@ -31,6 +31,24 @@ test('loads a valid config and normalizes origins and probe policy', () => {
   assert.deepEqual(cfg.allowedOrigins, ['https://example.test']);
   assert.equal(cfg.probe.security.allowRemoteApiBase, true);
   assert.equal(cfg.probe.security.allowNodegetBackends, false);
+  const shared = normalizeConfig({
+    probe: {
+      sources: [{
+        url: 'https://komari.example.com',
+        kind: 'komari',
+        shareUrlEnv: 'KOMARI_SHARE_URL',
+      }],
+    },
+  }, 'config.json');
+  assert.equal(shared.probe.sources[0].shareUrlEnv, 'KOMARI_SHARE_URL');
+  assert.throws(
+    () => normalizeConfig({ probe: { sources: [{ url: 'https://komari.example.com', shareUrlEnv: 'bad-name' }] } }, 'config.json'),
+    /shareUrlEnv/
+  );
+  assert.throws(
+    () => normalizeConfig({ probe: { sources: [{ url: 'https://komari.example.com', tokenEnv: 'KOMARI_API_KEY', shareUrlEnv: 'KOMARI_SHARE_URL' }] } }, 'config.json'),
+    /only one of tokenEnv or shareUrlEnv/
+  );
 });
 
 test('malformed JSON fails instead of silently using defaults', () => {

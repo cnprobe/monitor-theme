@@ -7,7 +7,7 @@ const items = manifest.configuration?.data || [];
 const byKey = new Map(items.map(item => [item.key, item]));
 
 test('Komari theme exposes safe display preferences', () => {
-  assert.equal(manifest.version, '0.1.1');
+  assert.equal(manifest.version, '0.1.2');
   assert.equal(byKey.get('probe_limit')?.type, 'number');
   assert.equal(byKey.get('probe_order')?.type, 'select');
   assert.equal(byKey.get('probe_limit')?.default, 10);

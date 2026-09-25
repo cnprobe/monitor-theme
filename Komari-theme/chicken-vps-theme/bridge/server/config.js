@@ -86,6 +86,13 @@ function validateSources(sources, field) {
       stringField(source.tokenEnv, `${at}.tokenEnv`, { max: 64 });
       if (!/^[A-Z][A-Z0-9_]*$/.test(source.tokenEnv)) fail(`${at}.tokenEnv`, 'must be an environment variable name');
     }
+    if (has(source, 'shareUrlEnv')) {
+      stringField(source.shareUrlEnv, `${at}.shareUrlEnv`, { max: 64 });
+      if (!/^[A-Z][A-Z0-9_]*$/.test(source.shareUrlEnv)) fail(`${at}.shareUrlEnv`, 'must be an environment variable name');
+    }
+    if (has(source, 'tokenEnv') && has(source, 'shareUrlEnv')) {
+      fail(at, 'must use only one of tokenEnv or shareUrlEnv');
+    }
     if (has(source, 'headers')) {
       if (!isObject(source.headers)) fail(`${at}.headers`, 'must be an object');
       const headerEntries = Object.entries(source.headers);

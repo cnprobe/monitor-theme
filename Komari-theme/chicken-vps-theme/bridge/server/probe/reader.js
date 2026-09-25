@@ -21,7 +21,7 @@ import * as nodeget from './adapters/nodeget.js';
 import * as nodeflare from './adapters/nodeflare.js';
 import * as cfvpsmon from './adapters/cfvpsmon.js';
 import * as generic from './adapters/generic.js';
-import { fetchJson, normalizeBase, siteRoot, describeError } from './http.js';
+import { fetchJson, normalizeBase, siteRoot, describeError, withTempShareCookie } from './http.js';
 import { num } from './normalize.js';
 import { isOriginAllowed, resolveProbeSecurity, withoutRemoteCredentials } from '../security.js';
 
@@ -29,9 +29,10 @@ export const ADAPTERS = { serverstatus, cf, minimal, komari, nezha, nodeget, nod
 
 /** 合并调用方 headers 与 token；显式 Authorization 头优先。 */
 function requestHeaders(opts = {}) {
-  const headers = { ...(opts.headers && typeof opts.headers === 'object' ? opts.headers : {}) };
+  let headers = { ...(opts.headers && typeof opts.headers === 'object' ? opts.headers : {}) };
   const hasAuthorization = Object.keys(headers).some(key => key.toLowerCase() === 'authorization');
   if (opts.token && !hasAuthorization) headers.Authorization = opts.token;
+  headers = withTempShareCookie(headers, opts.shareKey);
   return Object.keys(headers).length ? headers : undefined;
 }
 
@@ -130,7 +131,7 @@ export async function readProbe(input, opts = {}) {
   const base = normalizeBase(input);
   const root = siteRoot(base);
   const security = resolveProbeSecurity(opts);
-  if (opts.token || hasAuthorization(opts.headers) || hasNonProtocolHeader(opts.headers)) {
+  if (opts.token || opts.shareKey || hasAuthorization(opts.headers) || hasNonProtocolHeader(opts.headers)) {
     try {
       const target = new URL(base);
       if (target.protocol === 'http:' && !isLoopbackHost(target.hostname)) {
