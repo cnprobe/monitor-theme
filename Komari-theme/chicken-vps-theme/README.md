@@ -55,39 +55,37 @@ chmod 600 bridge/config.json
 
 `bridge/config.json` 是 JSON 文件，不能写 `//` 注释；下面的注释只用于解释，实际复制时不要复制注释。
 
-### 2. 只使用 Komari 的完整配置
+### 2. 推荐的完整最小配置（兼容私有 Komari）
 
-把 `bridge/config.json` 替换成下面内容，只修改你的 Komari 域名：
+把 `bridge/config.json` 替换成下面内容，只需要修改你的 Komari 域名。**下面为了逐行解释，使用的是 JSONC 展示格式；实际的 `bridge/config.json` 必须是严格 JSON，复制时必须删除所有 `//` 注释。**
 
-```json
-{
-  "port": 3777,
-  "allowedOrigins": [
-    "https://monitor.example.com"
-  ],
-  "geese": 2,
-  "maxPlayers": 60,
-  "maxProbeChicks": 200,
-  "maxNpcEntities": 500,
-  "maxHandshakesPerMinute": 60,
-  "exposeVisitorGeo": false,
-  "geo": {
-    "externalLookup": false
-  },
-  "probe": {
-    "interval": 15000,
-    "sources": [
-      {
-        "name": "我的 Komari",
-        "url": "https://monitor.example.com",
-        "kind": "komari",
-        "timeout": 12000
-      }
-    ],
-    "sites": []
-  }
-}
+```jsonc
+{ // 根配置对象开始
+  "port": 3777, // Bridge 容器内部端口；宿主机映射到 40002 时这里仍然写 3777
+  "allowedOrigins": [ // 允许打开 Komari 主题页面的浏览器 Origin 白名单开始
+    "https://komari.example.com" // 替换为你的 Komari Origin；不要写 /ws、/api 等路径
+  ], // Origin 白名单数组结束
+  "probe": { // 探针配置对象开始
+    "sources": [ // Komari 数据源列表开始
+      { // 单个 Komari 数据源开始
+        "name": "我的私有 Komari", // Bridge 探针状态中显示的名称，可以自定义
+        "url": "https://komari.example.com", // Komari 根地址；不要添加 /api/nodes 或 /api/rpc2
+        "kind": "komari", // 固定写 komari，Bridge 才会使用 Komari 适配器
+        "tokenEnv": "KOMARI_API_KEY", // 从 Bridge 服务端环境变量读取私有 Key；公开 Komari 可删除
+        "timeout": 12000 // 单次读取 Komari 的超时时间，单位是毫秒
+      } // 单个 Komari 数据源结束
+    ] // Komari 数据源列表结束
+  } // 探针配置对象结束
+} // 根配置对象结束
 ```
+
+这份配置同时覆盖公开和私有 Komari：
+
+- 公开 Komari：可以删除 `tokenEnv`，也不需要创建 `.env`；
+- 私有 Komari：保留 `tokenEnv`，并在 Bridge 服务端的 `.env` 中填写 `KOMARI_API_KEY`；
+- `kind` 必须保持为 `komari`，Bridge 会自动读取 `/api/nodes` 和 `/api/rpc2`；
+- `allowedOrigins` 填 Komari 页面 Origin，不要添加 `/ws` 或 `/api` 路径；
+- 其他未写出的资源限制会使用默认值。
 
 ### 3. 每个 Komari 配置项是什么意思
 
@@ -242,7 +240,7 @@ Bridge 会自动访问 Komari 的公开接口：
 /api/rpc2
 ```
 
-公开 Komari 不需要填写 `tokenEnv`、`headers` 或管理员 API Key；私有 Komari 的 API Key 配置方式见后文。
+公开 Komari 不需要填写 `tokenEnv`、`headers` 或管理员 API Key；私有 Komari 保留 `tokenEnv`，API Key 只放在 Bridge 服务端 `.env` 中。
 
 如果你的 Komari 完全关闭了公开接口、需要登录或使用非标准魔改接口，Bridge 可能读不到数据；这种情况不是配置 Token 就能解决的。
 
@@ -339,42 +337,28 @@ DOCKER_GID=1000
 
 不要把 Komari 管理员 Key、Agent Token 或其他秘密放进主题设置或 `komari-theme.json`。私有 Komari 的 API Key 如果使用，只能保存在 Bridge 服务器的 `.env` 或其他服务端 Secret 中。
 
-### 私有 Komari 的可选配置
+### 私有 Komari 的 API Key
 
-如果你的 Komari 开启了“私有站点”，可以给 Bridge 配置 Komari API Key。API Key 只由 Bridge 读取，不会发送给浏览器，也不会放进 Komari 主题设置。
-
-先复制环境文件：
+上面的完整最小配置已经包含私有 Komari 所需的 `tokenEnv`。如果你的 Komari 开启了“私有站点”，只需要在 Bridge 服务器创建 `.env`：
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-在 `.env` 中填写 Komari 后台生成的 API Key 原始值：
+然后填写 Komari 后台生成的原始 API Key：
 
 ```dotenv
 KOMARI_API_KEY=这里填写原始APIKey
 ```
 
-然后在 `bridge/config.json` 的 Komari 源中增加：
-
-```json
-{
-  "name": "我的私有 Komari",
-  "url": "https://monitor.example.com",
-  "kind": "komari",
-  "tokenEnv": "KOMARI_API_KEY",
-  "timeout": 12000
-}
-```
-
-Bridge 会自动向 Komari 发送：
+Bridge 会自动发送：
 
 ```text
 Authorization: Bearer <KOMARI_API_KEY>
 ```
 
-私有模式下，Bridge 读取 `/api/public` 中的主题设置时也会使用同一个服务端 Key；Key 不会返回给浏览器。
+私有模式下，Bridge 读取 `/api/public` 中的主题设置时也会使用同一个服务端 Key；Key 不会返回给浏览器，也不会写入主题 ZIP。
 
 使用私有配置时，Docker 命令必须带上环境文件：
 
@@ -391,14 +375,13 @@ docker run -d \
 
 注意：
 
-- 私有 Komari 配置中要保留 `"kind": "komari"`，不要改成 `auto`；
+- 私有 Komari 配置中要保留 `"kind": "komari"` 和 `"tokenEnv": "KOMARI_API_KEY"`；
 - `KOMARI_API_KEY` 填原始 Key，不要填管理员用户名和密码；
-- 不同版本的 Komari API Key 菜单名称可能不同；
 - API Key 相当于服务端凭据，当前 Komari 版本的 API Key 可能拥有较高权限；
 - 不要把 `.env` 提交到 Git；
 - 不要把 API Key 写入 `komari-theme.json`、主题 ZIP 或 `bridge_url`；
 - 怀疑泄露时立即在 Komari 后台撤销并重新生成；
-- 公共 Komari 不需要这个配置，保持 `.env` 不填即可。
+- 公开 Komari 可以删除 `tokenEnv`，并且不需要创建 `.env`。
 
 **重要：API Key 只解决 Bridge 读取私有 Komari 的认证问题，不会让 Bridge 本身变成私有服务。** 当前 Bridge 的 WebSocket 只有 Origin 校验，没有 Komari 账号登录认证。任何能访问 `wss://.../ws` 的人，只要通过 Origin 白名单，都可能看到节点统计。
 
@@ -832,19 +815,39 @@ npm run build
 .github/workflows/chicken-vps-bridge.yml
 ```
 
-当前主题只监听：
+当前主题的发布工作流只响应本主题专用 Tag：
 
 ```text
-Komari-theme/chicken-vps-theme/**
+chicken-vps-bridge-v*
 ```
 
-因此其他目录的修改不会重复构建这个 Bridge 镜像。工作流会：
+例如发布 `0.1.1`：
 
-- 推送到 `main` 时构建并推送 GHCR 镜像；
-- Pull Request 只构建验证，不推送；
-- 手动触发时可以填写固定 `image_tag`；
-- 构建 `linux/amd64` 和 `linux/arm64`；
-- 使用 GitHub Actions 内置 `GITHUB_TOKEN`，不需要 Docker Hub 密码。
+```bash
+git tag -a chicken-vps-bridge-v0.1.1 -m "Release Chicken VPS Bridge 0.1.1"
+git push origin chicken-vps-bridge-v0.1.1
+```
+
+只有推送这个 Tag 时才会：
+
+- 构建 `linux/amd64` 和 `linux/arm64` 镜像；
+- 推送 `ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.1.1`；
+- 更新 `ghcr.io/cnprobe/chicken-vps-bridge:latest`；
+- 生成构建证明、SBOM 和缓存。
+
+普通分支推送不会发布镜像。Pull Request 只做构建验证，不登录 GHCR，也不推送镜像。
+
+其他主题必须使用不同的 Tag 前缀，例如：
+
+```text
+other-bridge-v*
+```
+
+因此推送其他主题的 Tag 不会触发 Chicken VPS Bridge 的工作流，也不会更新本主题的镜像。通用构建器位于：
+
+```text
+.github/workflows/build-theme-image.yml
+```
 
 新主题的 CI 规则见：
 

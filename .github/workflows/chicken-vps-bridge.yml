@@ -2,23 +2,13 @@ name: Build Chicken VPS Bridge
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'Komari-theme/chicken-vps-theme/**'
-      - '.github/workflows/build-theme-image.yml'
-      - '.github/workflows/chicken-vps-bridge.yml'
+    tags:
+      - 'chicken-vps-bridge-v*'
   pull_request:
     paths:
       - 'Komari-theme/chicken-vps-theme/**'
       - '.github/workflows/build-theme-image.yml'
       - '.github/workflows/chicken-vps-bridge.yml'
-  workflow_dispatch:
-    inputs:
-      image_tag:
-        description: 'Optional tag, for example 0.1.1'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -35,4 +25,4 @@ jobs:
       context: ./Komari-theme/chicken-vps-theme
       image_name: chicken-vps-bridge
       cache_scope: chicken-vps-bridge
-      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || '' }}
+      publish: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}

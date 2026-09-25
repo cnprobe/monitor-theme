@@ -19,6 +19,7 @@
         "name": "我的 Komari",
         "url": "https://monitor.example.com",
         "kind": "komari",
+        "tokenEnv": "KOMARI_API_KEY",
         "timeout": 12000
       }
     ],
