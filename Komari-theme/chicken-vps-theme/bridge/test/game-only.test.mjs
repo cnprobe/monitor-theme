@@ -46,8 +46,17 @@ test('Bridge roster contains only authoritative players and optional geese', () 
     wss.clients.add(player.ws);
     game.broadcastRoster();
 
+    const geese = [...game.npcs.values()];
     assert.equal(game.npcs.size, 2);
-    assert.ok([...game.npcs.values()].every(npc => npc.type === 'goose'));
+    assert.ok(geese.every(npc => npc.type === 'goose'));
+    assert.deepEqual(geese.map(npc => npc.name), ['NPC-大白鹅-1', 'NPC-大白鹅-2']);
+
+    // 击杀只记到实际完成攻击的那只鹅，不共享给鹅群。
+    const victim = { id: 99, x: geese[0].x, z: geese[0].z, hp: 1, kx: 0, kz: 0 };
+    game.npcPeck(geese[0], game.time, victim);
+    assert.equal(geese[0].score, 1);
+    assert.equal(geese[1].score, 0);
+
     assert.equal(player.ws.sent.length, 1);
     const message = JSON.parse(player.ws.sent[0]);
     assert.equal(message.t, 'r');

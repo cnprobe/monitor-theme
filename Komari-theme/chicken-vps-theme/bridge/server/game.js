@@ -235,7 +235,7 @@ export class Game {
       const t = NPC_TYPE.goose;
       const n = {
         id: 9000 + i + 1,
-        npc: true, type: 'goose', name: `NPC·大白鹅`,
+        npc: true, type: 'goose', name: `NPC-大白鹅-${i + 1}`,
         color: t.color, radius: t.radius, maxHp: t.maxHp,
         x: 0, z: 0, y: 0, vy: 0, kx: 0, kz: 0,
         yaw: Math.random() * 6.28, hp: t.maxHp, score: 0,
@@ -357,10 +357,8 @@ export class Game {
     if (victim.hp <= 0) {
       victim.hp = 0;
       victim.deadUntil = now + CONF.koTime;
-      // 大鹅军团共享战绩
-      for (const goose of this.npcs.values()) {
-        if (goose.type === 'goose') goose.score++;
-      }
+      // 每只大鹅只记自己的击杀，战绩不再由鹅群共享。
+      n.score++;
       this.evQueue.push({ e: 'ko', f: n.id, t: victim.id });
     } else {
       this.evQueue.push({ e: 'hit', f: n.id, t: victim.id, hp: victim.hp });

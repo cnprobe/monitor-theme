@@ -7,7 +7,7 @@ const items = manifest.configuration?.data || [];
 const byKey = new Map(items.map(item => [item.key, item]));
 
 test('Komari theme exposes only safe display and optional multiplayer settings', () => {
-  assert.equal(manifest.version, '0.2.0');
+  assert.equal(manifest.version, '0.2.1');
   assert.deepEqual([...byKey.keys()], [
     'bridge_url',
     'probe_limit',

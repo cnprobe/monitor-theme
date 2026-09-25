@@ -154,16 +154,17 @@ export class HUD {
       !gooseIds.has(entry[0]) && !monitoredIds.has(entry[0])
     )).length);
 
-    // 只读节点不可计分；排行榜仅包含玩家，大鹅合并为一个榜位。
-    const gooseScore = snapshotPs
-      .filter(entry => gooseIds.has(entry[0]))
-      .reduce((sum, entry) => sum + entry[7], 0);
+    // 只读节点不可计分；玩家与每只大鹅分别占一个榜位。
     this.rows = snapshotPs
-      .filter(entry => !gooseIds.has(entry[0]) && !roster.get(entry[0])?.readonly)
+      .filter(entry => !roster.get(entry[0])?.readonly)
       .map(entry => {
         const info = roster.get(entry[0]);
         const name = info?.name || `#${entry[0]}`;
-        return { id: entry[0], score: entry[7], name: name + '（玩家）' };
+        return {
+          id: entry[0],
+          score: entry[7],
+          name: info?.npc ? name : name + '（玩家）',
+        };
       });
     // 离场玩家的啄倒记录补进榜（服务端 roster.left）；还在场上的以实时数据为准
     const liveIds = new Set(this.rows.map(r => r.id));
@@ -172,7 +173,6 @@ export class HUD {
         this.rows.push({ id: rec.id, score: rec.score, name: rec.name + '（玩家）', left: true });
       }
     }
-    if (gooseIds.size > 0) this.rows.push({ id: 'goose-team', score: gooseScore, name: 'NPC·大白鹅' });
     this.rows.sort((a, b) => b.score - a.score);
     this.renderBoard();
   }

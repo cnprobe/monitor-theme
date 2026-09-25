@@ -124,7 +124,9 @@ test('two clients receive authoritative roster, snapshots, and resume the same p
     const roster = await secondCollector.waitFor(message => (
       message.t === 'r' && message.list.filter(info => !info.npc).length === 2
     ));
-    assert.equal(roster.list.filter(info => info.npc && info.type === 'goose').length, 1);
+    const rosterGeese = roster.list.filter(info => info.npc && info.type === 'goose');
+    assert.equal(rosterGeese.length, 1);
+    assert.equal(rosterGeese[0].name, 'NPC-大白鹅-1');
     assert.equal(roster.list.some(info => 'stats' in info || 'readonly' in info), false);
     assert.equal('probe' in roster, false);
 

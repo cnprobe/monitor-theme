@@ -8,7 +8,7 @@
     "zh-CN": "单 ZIP 读取当前 Komari 节点，并可选连接极简多人 Bridge 进行互啄。",
     "en": "A single ZIP reads current Komari nodes and optionally connects to a minimal multiplayer Bridge."
   },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Komari Community",
   "url": "https://github.com/komari-monitor/komari-document",
   "preview": "preview.svg",

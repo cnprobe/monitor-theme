@@ -29,7 +29,7 @@
 
 只显示 Komari 节点和 3D 小鸡时，不需要 Bridge、Docker、`.env` 或任何凭据。
 
-1. 获取 `ChickenFarm-0.2.0.zip`。
+1. 获取 `ChickenFarm-0.2.1.zip`。
 2. 在 Komari 后台上传 ZIP。
 3. 打开主题页面。
 4. 公共站点直接显示；私有站点先登录，或使用 Komari 生成的临时分享链接打开主题。
@@ -98,6 +98,7 @@ chmod 600 bridge/config.json
 
 - `allowedOrigins` 填写真实 Komari 页面 Origin，不带路径。
 - `geese: 0` 可关闭大鹅。
+- 每只大鹅按创建顺序命名为 `NPC-大白鹅-1`、`NPC-大白鹅-2` 等，并独立记录自己的击杀战绩。
 - `maxPlayers` 限制同时在线玩家数。
 - 配置中没有 Komari 地址、凭据、节点列表或轮询设置。
 
@@ -291,8 +292,8 @@ npm run package
 主题产物：
 
 ```text
-release/ChickenFarm-0.2.0.zip
-SHA-256: c0f1a7a72f3d1d0f844ccd2e576b1707cad4aa32b0159dd134bf0df3a6e41d90
+release/ChickenFarm-0.2.1.zip
+SHA-256: 98c3658408d27bf748646a46ed5e01dd92ab3d966488e6bd17907e3ba0097334
 ```
 
 ZIP 只包含主题静态资源、清单、预览图、来源说明和安全说明，不包含 `bridge/config.json`、`.env`、密钥或 Bridge 源码。
@@ -306,17 +307,17 @@ Bridge 镜像由根仓库工作流构建：
 .github/workflows/build-theme-image.yml
 ```
 
-发布 `0.2.0`：
+发布 `0.2.1`：
 
 ```bash
-git tag -a chicken-vps-bridge-v0.2.0 -m "Release Chicken VPS Bridge 0.2.0"
-git push origin chicken-vps-bridge-v0.2.0
+git tag -a chicken-vps-bridge-v0.2.1 -m "Release Chicken VPS Bridge 0.2.1"
+git push origin chicken-vps-bridge-v0.2.1
 ```
 
 镜像标签：
 
 ```text
-ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.0
+ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.1
 ghcr.io/cnprobe/chicken-vps-bridge:latest
 ```
 

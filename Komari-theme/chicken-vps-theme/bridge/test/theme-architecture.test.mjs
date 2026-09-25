@@ -34,5 +34,6 @@ test('single-ZIP nodes are read-only, non-colliding, and never use admin metadat
   assert.match(net, /message\.protocol !== 2/);
   assert.doesNotMatch(net, /sanitizeStats|readonly|collidable/);
   assert.match(hud, /setMultiplayerActive/);
+  assert.doesNotMatch(hud, /goose-team|NPC·大白鹅/);
   assert.doesNotMatch(html, /web-online|website-count/);
 });
