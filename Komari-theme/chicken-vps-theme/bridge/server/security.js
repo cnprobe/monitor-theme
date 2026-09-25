@@ -1,10 +1,7 @@
 import net from 'node:net';
 
-// 伴生服务的安全策略与纯函数帮助器。
-//
-// 这里不依赖 Node 专有 API，方便配置解析、探针读取器和 node:test 共同使用。
-// 默认策略是保守的：远程 apiBase 和 NodeGet backend 都是关闭的，只有明确
-// 配置为 true 才会跟随。
+// 多人 Bridge 的 Origin 与反向代理信任策略。
+// 默认只允许本机开发 Origin；公网 Origin 必须由管理员显式配置。
 
 const LOCAL_DEV_PORTS = [3777, 4173, 8080];
 
@@ -89,126 +86,6 @@ export function isOriginAllowed(origin, allowedOrigins = DEFAULT_ALLOWED_ORIGINS
     const normalized = canonicalOrigin(value);
     return normalized !== '*' && normalized === candidate;
   });
-}
-
-export const DEFAULT_PROBE_SECURITY = Object.freeze({
-  allowRemoteApiBase: false,
-  allowNodegetBackends: false,
-  apiBaseOrigins: Object.freeze([]),
-  nodegetBackendOrigins: Object.freeze([]),
-});
-
-function firstDefined(...values) {
-  return values.find(value => value !== undefined);
-}
-
-/**
- * 统一探针安全策略。
- *
- * 规范字段是 allowRemoteApiBase / allowNodegetBackends；同时接受几个旧/直观
- * 拼写，方便升级时不被旧配置悄悄改变。嵌套 security 字段优先于外层字段。
- */
-export function resolveProbeSecurity(input = {}, fallback = DEFAULT_PROBE_SECURITY) {
-  let value = input && typeof input === 'object' ? input : {};
-  if (value.probe && typeof value.probe === 'object') {
-    value = { ...value, ...value.probe, ...(value.probe.security || {}) };
-  }
-  if (value.security && typeof value.security === 'object') {
-    value = { ...value, ...value.security };
-  }
-
-  const base = fallback && typeof fallback === 'object' ? fallback : DEFAULT_PROBE_SECURITY;
-  const remoteApiBase = firstDefined(
-    value.allowRemoteApiBase,
-    value.allowApiBase,
-    value.followRemoteApiBase,
-    value.followApiBase,
-    value.remoteApiBase?.allow,
-    value.apiBase?.follow,
-    base.allowRemoteApiBase
-  );
-  const nodegetBackends = firstDefined(
-    value.allowNodegetBackends,
-    value.allowNodegetBackendFollowing,
-    value.allowNodegetBackend,
-    value.followNodegetBackends,
-    value.followNodegetBackend,
-    value.nodegetBackends,
-    base.allowNodegetBackends
-  );
-
-  const apiBaseOrigins = firstDefined(
-    value.apiBaseOrigins,
-    value.remoteApiBase?.origins,
-    value.apiBase?.origins,
-    base.apiBaseOrigins
-  );
-  const nodegetBackendOrigins = firstDefined(
-    value.nodegetBackendOrigins,
-    value.nodeget?.origins,
-    base.nodegetBackendOrigins
-  );
-
-  return {
-    allowRemoteApiBase: remoteApiBase === true,
-    allowNodegetBackends: nodegetBackends === true,
-    apiBaseOrigins: normalizeAllowedOrigins(apiBaseOrigins || []),
-    nodegetBackendOrigins: normalizeAllowedOrigins(nodegetBackendOrigins || []),
-  };
-}
-
-const SAFE_PROBE_HEADERS = new Set([
-  'accept',
-  'accept-language',
-  'content-type',
-  'user-agent',
-  'x-requested-with',
-]);
-
-/** 跨 origin 只保留协议级头，避免把 Cookie/API-Key 等自定义凭据带走。 */
-export function stripAuthorizationHeaders(headers) {
-  if (!headers || typeof headers !== 'object') return headers;
-  const out = {};
-  const entries = typeof headers.entries === 'function' ? headers.entries() : Object.entries(headers);
-  for (const [key, value] of entries) {
-    if (SAFE_PROBE_HEADERS.has(String(key).toLowerCase())) out[key] = value;
-  }
-  return out;
-}
-
-/**
- * 为 apiBase 跟随生成选项：不把源站 token / Authorization 头带到新 origin。
- * 直接配置的源不会经过这里，因此仍可正常使用自己的凭据。
- */
-export function withoutRemoteCredentials(options = {}) {
-  const out = { ...(options && typeof options === 'object' ? options : {}) };
-  delete out.token;
-  delete out.apiToken;
-  delete out.tokenEnv;
-  delete out.shareKey;
-  delete out.shareUrlEnv;
-  delete out.authorization;
-  if (Object.prototype.hasOwnProperty.call(out, 'headers')) {
-    out.headers = stripAuthorizationHeaders(out.headers);
-  }
-  return out;
-}
-
-/** 比较两个 URL 是否同源；路径不参与比较，无法解析时返回 false。 */
-export function isSameOrigin(a, b) {
-  const originOf = value => {
-    if (typeof value !== 'string') return null;
-    try {
-      const u = new URL(value);
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-      return u.origin;
-    } catch {
-      return null;
-    }
-  };
-  const ua = originOf(a);
-  const ub = originOf(b);
-  return !!ua && !!ub && ua === ub;
 }
 
 function ipv4Number(ip) {

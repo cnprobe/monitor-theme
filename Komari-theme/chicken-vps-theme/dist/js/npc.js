@@ -1,7 +1,5 @@
-// NPC 动物：大白鹅的程序化低多边形模型与动作。
-// 对外接口与 Chicken 一致（group/update/triggerPeck/flash/setHp/dispose），
-// main.js 可以用同一套插值与事件代码驱动。
-// （探针小鸡使用 Chicken 类渲染，见 main.js 的 roster 分支。）
+// 可选多人 NPC：大白鹅的程序化低多边形模型与动作。
+// 对外接口与 Chicken 一致（group/update/triggerPeck/flash/setHp/dispose）。
 
 import * as THREE from 'three';
 import { CONF, ST_DEAD, ST_PECK, ST_AIR, ST_RUN } from '/shared/physics.js';

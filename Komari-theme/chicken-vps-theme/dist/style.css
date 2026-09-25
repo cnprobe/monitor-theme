@@ -39,7 +39,12 @@ canvas { display: block; touch-action: none; }
 }
 .topbar-brand { margin-bottom: 2px; }
 .topbar-counts { display: flex; gap: 12px; align-items: center; }
-#online, #web-online, #visitors { color: #ffd95e; }
+#online, #visitors { color: #ffd95e; }
+
+/* 单 ZIP 模式只展示监控，不伪装成多人服务器。 */
+body.singleplayer #board,
+body.singleplayer #me,
+body.singleplayer #visitor-count { display: none !important; }
 #bridge-state {
   margin-top: 5px; padding: 2px 8px; border: 1px solid rgba(255,255,255,.25);
   border-radius: 999px; color: #fff; background: rgba(255,255,255,.12);
@@ -52,7 +57,7 @@ canvas { display: block; touch-action: none; }
 #topbar.stale { background: rgba(70, 30, 20, .62); }
 #topbar.stale #online { color: #ff9f6b; }
 
-/* 探针数据源异常提示（默认隐藏；可多行，每行一个源的原因） */
+/* Komari 数据读取异常提示（默认隐藏） */
 #probe-warn {
   position: absolute; top: calc(12px + var(--sa-t)); left: 50%; transform: translateX(-50%);
   background: rgba(120, 40, 30, .82); color: #ffe0d0;

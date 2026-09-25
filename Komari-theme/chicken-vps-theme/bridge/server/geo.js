@@ -4,7 +4,6 @@ import fs from 'fs';
 import net from 'node:net';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { readResponseText } from './probe/http.js';
 
 const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data');
 const cache = new Map();
@@ -80,6 +79,30 @@ function withTimeout(ms) {
 
 const has = result => result && (result.code || result.asn);
 
+async function readLimitedText(response, maxBytes = 64 * 1024) {
+  const advertised = Number(response.headers.get('content-length'));
+  if (Number.isFinite(advertised) && advertised > maxBytes) throw new Error('response too large');
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('response too large');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
+}
+
 async function getJson(url, ms = 3000) {
   const timeout = withTimeout(ms);
   try {
@@ -89,7 +112,7 @@ async function getJson(url, ms = 3000) {
       redirect: 'error',
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return JSON.parse(await readResponseText(response, 64 * 1024));
+    return JSON.parse(await readLimitedText(response));
   } finally {
     timeout.done();
   }

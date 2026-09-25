@@ -1,7 +1,6 @@
 // HUD：在线人数、排行榜、击倒播报、自己状态栏、横幅提示。
 
-// 排行榜用 innerHTML 拼接，名字必须转义：探针鸡的名字来自各站点机器名
-// （运营者可控），不转义就是 HTML 注入。
+// 排行榜用 innerHTML 拼接，玩家名字由客户端提供，必须先转义。
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
 
@@ -9,7 +8,6 @@ export class HUD {
   constructor() {
     this.$ = (id) => document.getElementById(id);
     this.online = this.$('online');
-    this.webOnline = this.$('web-online');
     this.visitors = this.$('visitors');
     this.board = this.$('board');
     this.boardTitle = this.$('board-title');
@@ -23,12 +21,7 @@ export class HUD {
       this.banner(`伴生服务：${this.bridgeDetail}`, 3500);
     });
     this.meName = this.$('me-name');
-    // ICONS 仅用于剥旧展示名的图标前缀（换图标功能已移除，存量带图标的名字过渡期兼容）
-    this.ICONS = ['🐔', '🐥', '🐤', '🐣', '🦅', '🦆', '🦉', '👑', '🔥', '⚡',
-      '⭐', '🌟', '💥', '🎯', '🥷', '🤖', '👻', '🤠', '🎃', '🌈',
-      '🍀', '❤️', '🥚', '🍗', '🥇', '🐉', '🦊', '🐺'];
-    this.myIcon = null;
-    this.onProfile = null; // main.js 注入：patch => net.send({t:'profile', ...patch})
+    this.onProfile = null; // main.js 注入：patch => net.sendProfile(patch.name)
     this.meEdit = this.$('me-edit');
     this.nameEditor = this.$('me-name-editor');
     this.nameInput = this.$('me-name-input');
@@ -42,25 +35,31 @@ export class HUD {
     this.koBanner = this.$('ko-banner');
     this.bannerTimer = null;
     this.probeWarn = this.$('probe-warn');
-    this.probeOk = true;
     this.collapsed = true; // 啄倒榜默认收起，点击标题展开/收起
     this.rows = [];
     this.leftBoard = [];   // 离场玩家的啄倒记录（roster.left 下发，服务端只记 score>0）
     this._lastBoardSig = ''; // 榜单渲染差分签名：没变就不动 DOM
     this._lastBoardPaint = 0; // 上次真正写 DOM 的时间（节流上限）
+    this.multiplayer = false;
+    this.setMultiplayerActive(false);
     this.board.addEventListener('click', () => {
       this.collapsed = !this.collapsed;
       this.renderBoard(true);
     });
   }
 
+  setMultiplayerActive(active) {
+    this.multiplayer = !!active;
+    document.body.classList.toggle('singleplayer', !this.multiplayer);
+    if (!this.multiplayer) {
+      this.closeEditor();
+      this.score.textContent = '单机浏览模式';
+      this.hpfill.style.width = '0%';
+    }
+  }
+
   setMe(name) {
-    const clean = String(name || '小鸡');
-    this.meName.textContent = clean;
-    // 旧展示名可能带「图标 + 空格」前缀（换图标功能已移除，存量名字过渡期兼容）：
-    // 记下当前图标，预填改名框时剥掉
-    const hit = this.ICONS.find(i => clean.startsWith(i + ' '));
-    this.myIcon = hit || null;
+    this.meName.textContent = String(name || '小鸡');
   }
 
   setBridgeState(state, detail = '') {
@@ -70,7 +69,7 @@ export class HUD {
       connected: '在线',
       connecting: '连接中',
       reconnecting: '重连中',
-      missing: '本地模式',
+      missing: '单机模式',
       error: '连接失败',
     };
     this.bridgeState.textContent = labels[state] || state;
@@ -78,12 +77,10 @@ export class HUD {
     this.bridgeState.title = this.bridgeDetail;
   }
 
-  // 名字旁 ✏️：弹出/收起改名浮层，打开时预填剥掉图标前缀后的名字
   toggleNameEditor() {
     const hidden = this.nameEditor.classList.toggle('hidden');
     if (!hidden) {
-      const cur = this.meName.textContent || '';
-      this.nameInput.value = this.myIcon ? cur.slice(this.myIcon.length + 1) : cur;
+      this.nameInput.value = this.meName.textContent || '';
       this.nameInput.focus();
       this.nameInput.select();
     }
@@ -99,37 +96,28 @@ export class HUD {
     this.closeEditor();
   }
 
-  // 探针数据源健康状态：挂了要让场内玩家知道，而不是看着过期数据发懵。
-  // h.sources 是每个源的读取摘要（服务端 probe.perSite）——
-  // 只要有**任何一个**源识别失败/无数据就提示（哪怕别的源正常）：
-  // 「新加了一个探针面板却读不到数据」时最需要这条，而不是全场静默。
-  setProbeHealth(h) {
-    const sources = Array.isArray(h?.sources) ? h.sources : [];
-    const broken = sources.filter(s => !s.ok || s.error || (s.warning && !s.kept));
-    const ok = (!h || h.ok !== false) && broken.length === 0;
-    this.probeOk = ok;
+  // ZIP 内浏览器直读 Komari 的健康状态；Bridge 多人连接状态由顶部按钮独立显示。
+  setProbeHealth(health) {
+    const ok = health?.ok === true;
     this.online.parentElement?.classList.toggle('stale', !ok);
-    if (this.probeWarn) {
-      this.probeWarn.classList.toggle('show', !ok);
-      if (!ok) {
-        const lines = [];
-        if (h?.error) lines.push(String(h.error));
-        for (const s of broken) {
-          lines.push(`${s.name || s.url}：${s.error || s.warning || '识别不到数据，无法自动获取接口'}`);
-        }
-        if (!lines.length) lines.push('探针识别不到数据，无法自动获取接口（检查面板地址 / 类型 / token）');
-        // 多行：每行一个源的原因（CSS 用 pre-line 折行）；
-        // roster 会反复进来，文本没变就不写 DOM
-        const text = `⚠️ 探针数据源异常，以下数据可能缺失或已过期\n` + lines.map(l => `· ${l}`).join('\n');
-        if (text !== this._lastProbeWarnText) {
-          this.probeWarn.textContent = text;
-          this._lastProbeWarnText = text;
-        }
-      }
+    if (!this.probeWarn) return;
+    this.probeWarn.classList.toggle('show', !ok);
+    if (ok) {
+      this._lastProbeWarnText = '';
+      this.probeWarn.textContent = '';
+      return;
+    }
+    const text = health?.unauthorized
+      ? '⚠️ 需要登录 Komari，或使用有效的临时分享链接打开主题'
+      : '⚠️ Komari 数据暂时不可用，当前可能显示上一次成功获取的数据';
+    if (text !== this._lastProbeWarnText) {
+      this.probeWarn.textContent = text;
+      this._lastProbeWarnText = text;
     }
   }
 
   setSelfState(hp, score, koLeft) {
+    if (!this.multiplayer) return;
     this.hpfill.style.width = Math.max(0, hp) + '%';
     this.hpfill.classList.toggle('low', hp <= 30);
     this.score.textContent = koLeft > 0
@@ -153,35 +141,29 @@ export class HUD {
   setLeftBoard(list) { this.leftBoard = Array.isArray(list) ? list : []; }
 
   update(snapshotPs, roster) {
-    // 计数：探针鸡（VPS）/ 网站鸡 / 访客（玩家）
-    // ★ 离线的探针鸡/网站鸡（躺倒在场上）不算「在线」——
-    //   之前只按类型计数，1 在线 + 1 离线会显示「在线 2」，误导（第 54 轮用户实测）。
-    //   同时要记进 offlineIds，否则它们会被误算成「访客」。
-    const gooseIds = new Set(), chickIds = new Set(), webIds = new Set(), offlineIds = new Set();
+    // 浏览器直读的 Komari 节点只参与“节点”计数；玩家和大鹅参与多人计数。
+    const gooseIds = new Set(), monitoredIds = new Set();
     for (const info of roster.values()) {
-      if (!info.npc) continue;
-      if (info.offline) { offlineIds.add(info.id); continue; }
       if (info.type === 'goose') gooseIds.add(info.id);
-      if (info.type === 'chick') chickIds.add(info.id);
-      if (info.type === 'web') webIds.add(info.id);
+      else if (info.readonly) monitoredIds.add(info.id);
     }
-    this.online.textContent = String(snapshotPs.filter(e => chickIds.has(e[0])).length);
-    this.webOnline.textContent = String(snapshotPs.filter(e => webIds.has(e[0])).length);
-    const visitorRows = snapshotPs.filter(e =>
-      !gooseIds.has(e[0]) && !chickIds.has(e[0]) && !webIds.has(e[0]) && !offlineIds.has(e[0]));
-    this.visitors.textContent = String(visitorRows.length);
+    this.online.textContent = String(snapshotPs.filter(entry => (
+      monitoredIds.has(entry[0]) && roster.get(entry[0])?.offline !== true
+    )).length);
+    this.visitors.textContent = String(snapshotPs.filter(entry => (
+      !gooseIds.has(entry[0]) && !monitoredIds.has(entry[0])
+    )).length);
 
-    // 排行榜数据：玩家 + 探针鸡 + 网站鸡各自上榜；所有 NPC 大白鹅合并为一个榜位
+    // 只读节点不可计分；排行榜仅包含玩家，大鹅合并为一个榜位。
     const gooseScore = snapshotPs
-      .filter(e => gooseIds.has(e[0]))
-      .reduce((sum, e) => sum + e[7], 0);
+      .filter(entry => gooseIds.has(entry[0]))
+      .reduce((sum, entry) => sum + entry[7], 0);
     this.rows = snapshotPs
-      .filter(e => !gooseIds.has(e[0]))
-      .map(e => {
-        const info = roster.get(e[0]);
-        const name = info?.name || `#${e[0]}`;
-        // 玩家（非 NPC）名字后面加「（玩家）」——探针鸡/网站鸡/大白鹅不加
-        return { id: e[0], score: e[7], name: info?.npc ? name : name + '（玩家）' };
+      .filter(entry => !gooseIds.has(entry[0]) && !roster.get(entry[0])?.readonly)
+      .map(entry => {
+        const info = roster.get(entry[0]);
+        const name = info?.name || `#${entry[0]}`;
+        return { id: entry[0], score: entry[7], name: name + '（玩家）' };
       });
     // 离场玩家的啄倒记录补进榜（服务端 roster.left）；还在场上的以实时数据为准
     const liveIds = new Set(this.rows.map(r => r.id));
@@ -210,7 +192,7 @@ export class HUD {
     this._lastBoardPaint = now;
     this.boardTitle.textContent = this.collapsed
       ? '🐔 啄倒榜'
-      : '🐔 啄倒榜（高占用触发主动攻击 · 点击收起）';
+      : '🐔 啄倒榜（玩家与大鹅 · 点击收起）';
     this.board.classList.toggle('collapsed', this.collapsed);
     if (this.collapsed) return;
     this.boardRows.innerHTML = top.map(r =>

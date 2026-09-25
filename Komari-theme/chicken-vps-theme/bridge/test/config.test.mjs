@@ -4,11 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import {
-  defaultConfig,
-  loadConfig,
-  normalizeConfig,
-} from '../server/config.js';
+import { defaultConfig, loadConfig, normalizeConfig } from '../server/config.js';
 
 function tempFile(contents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chicken-bridge-config-'));
@@ -17,38 +13,24 @@ function tempFile(contents) {
   return { dir, file };
 }
 
-test('loads a valid config and normalizes origins and probe policy', () => {
-  const raw = {
+test('loads the minimal multiplayer Bridge config', () => {
+  const cfg = normalizeConfig({
     port: 8081,
     allowedOrigins: ['https://Example.test/'],
-    probe: {
-      interval: 1000,
-      security: { allowRemoteApiBase: true, allowNodegetBackends: false },
-    },
-  };
-  const cfg = normalizeConfig(raw, 'config.json');
+    geese: 3,
+    maxPlayers: 20,
+    geo: { externalLookup: false },
+  }, 'config.json');
   assert.equal(cfg.port, 8081);
   assert.deepEqual(cfg.allowedOrigins, ['https://example.test']);
-  assert.equal(cfg.probe.security.allowRemoteApiBase, true);
-  assert.equal(cfg.probe.security.allowNodegetBackends, false);
-  const shared = normalizeConfig({
-    probe: {
-      sources: [{
-        url: 'https://komari.example.com',
-        kind: 'komari',
-        shareUrlEnv: 'KOMARI_SHARE_URL',
-      }],
-    },
-  }, 'config.json');
-  assert.equal(shared.probe.sources[0].shareUrlEnv, 'KOMARI_SHARE_URL');
-  assert.throws(
-    () => normalizeConfig({ probe: { sources: [{ url: 'https://komari.example.com', shareUrlEnv: 'bad-name' }] } }, 'config.json'),
-    /shareUrlEnv/
-  );
-  assert.throws(
-    () => normalizeConfig({ probe: { sources: [{ url: 'https://komari.example.com', tokenEnv: 'KOMARI_API_KEY', shareUrlEnv: 'KOMARI_SHARE_URL' }] } }, 'config.json'),
-    /only one of tokenEnv or shareUrlEnv/
-  );
+  assert.equal(cfg.geese, 3);
+  assert.equal(cfg.maxPlayers, 20);
+  assert.equal(cfg.geo.externalLookup, false);
+});
+
+test('unknown configuration fields are discarded from the game-only Bridge', () => {
+  const cfg = normalizeConfig({ unexpectedOption: true }, 'config.json');
+  assert.equal(cfg.unexpectedOption, undefined);
 });
 
 test('malformed JSON fails instead of silently using defaults', () => {
@@ -60,30 +42,20 @@ test('malformed JSON fails instead of silently using defaults', () => {
   }
 });
 
-test('invalid config fields fail with the field path', () => {
+test('invalid multiplayer config fields fail with the field path', () => {
   assert.throws(
     () => normalizeConfig({ allowedOrigins: 'https://example.test' }, 'config.json'),
     /config\.json\.allowedOrigins/
   );
-  assert.throws(
-    () => normalizeConfig({ probe: { sources: {} } }, 'config.json'),
-    /config\.json\.probe\.sources/
-  );
-  assert.throws(
-    () => normalizeConfig({ maxProbeChicks: 100000 }, 'config.json'),
-    /config\.json\.maxProbeChicks/
-  );
-  assert.throws(
-    () => normalizeConfig({ geese: 100000 }, 'config.json'),
-    /config\.json\.geese/
-  );
-  assert.throws(
-    () => normalizeConfig({ maxNpcEntities: 100000 }, 'config.json'),
-    /config\.json\.maxNpcEntities/
-  );
+  assert.throws(() => normalizeConfig({ geese: 100000 }, 'config.json'), /config\.json\.geese/);
+  assert.throws(() => normalizeConfig({ maxPlayers: 0 }, 'config.json'), /config\.json\.maxPlayers/);
   assert.throws(
     () => normalizeConfig({ maxHandshakesPerMinute: 1 }, 'config.json'),
     /config\.json\.maxHandshakesPerMinute/
+  );
+  assert.throws(
+    () => normalizeConfig({ geo: { providers: ['unknown'] } }, 'config.json'),
+    /config\.json\.geo\.providers/
   );
   assert.throws(
     () => normalizeConfig({ trustedProxyCidrs: ['not-a-cidr'] }, 'config.json'),
@@ -95,11 +67,11 @@ test('invalid config fields fail with the field path', () => {
   );
 });
 
-test('missing config uses localhost-only development defaults', () => {
+test('missing config uses localhost-only multiplayer defaults', () => {
   const cfg = defaultConfig();
   assert.ok(cfg.allowedOrigins.includes('http://localhost:3777'));
   assert.ok(cfg.allowedOrigins.includes('http://127.0.0.1:4173'));
   assert.ok(cfg.allowedOrigins.every(origin => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):/.test(origin)));
-  assert.equal(cfg.probe.security.allowRemoteApiBase, false);
-  assert.equal(cfg.probe.security.allowNodegetBackends, false);
+  assert.equal(cfg.geese, 2);
+  assert.equal(cfg.maxPlayers, 60);
 });

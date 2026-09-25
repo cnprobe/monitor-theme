@@ -2,21 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  DEFAULT_PROBE_SECURITY,
   canonicalOrigin,
   defaultAllowedOrigins,
   isOriginAllowed,
-  isSameOrigin,
   isTrustedProxy,
   normalizeAllowedOrigins,
   resolveClientIp,
-  resolveProbeSecurity,
   validateTrustedProxyCidrs,
-  stripAuthorizationHeaders,
-  withoutRemoteCredentials,
 } from '../server/security.js';
-import { extractApiBases, readProbe } from '../server/probe/reader.js';
-import { resolveSource, resolveSourceShareKey, resolveSourceToken } from '../server/probe.js';
 
 test('origin allowlist matches normalized exact origins only', () => {
   const allowed = normalizeAllowedOrigins(['https://Example.test/', 'http://localhost:3777']);
@@ -38,52 +31,6 @@ test('origin defaults contain only local development origins', () => {
     value.startsWith('http://127.0.0.1') || value.startsWith('http://[::1]')));
 });
 
-test('probe security defaults deny remote following and accept explicit opt-in', () => {
-  assert.deepEqual(resolveProbeSecurity(), {
-    allowRemoteApiBase: false,
-    allowNodegetBackends: false,
-    apiBaseOrigins: [],
-    nodegetBackendOrigins: [],
-  });
-  assert.deepEqual(resolveProbeSecurity({ allowRemoteApiBase: true }), {
-    allowRemoteApiBase: true,
-    allowNodegetBackends: false,
-    apiBaseOrigins: [],
-    nodegetBackendOrigins: [],
-  });
-  assert.deepEqual(resolveProbeSecurity({ security: { allowNodegetBackends: true } }), {
-    allowRemoteApiBase: false,
-    allowNodegetBackends: true,
-    apiBaseOrigins: [],
-    nodegetBackendOrigins: [],
-  });
-  assert.equal(DEFAULT_PROBE_SECURITY.allowRemoteApiBase, false);
-});
-
-test('cross-origin options remove credentials without mutating the source', () => {
-  const source = {
-    token: 'Bearer secret',
-    apiToken: 'api-secret',
-    tokenEnv: 'TOKEN_ENV',
-    shareKey: 'share-secret',
-    shareUrlEnv: 'SHARE_URL_ENV',
-    headers: {
-      Authorization: 'Bearer header-secret',
-      'X-Trace': 'ok',
-      Accept: 'application/json',
-    },
-  };
-  const safe = withoutRemoteCredentials(source);
-  assert.equal(safe.token, undefined);
-  assert.equal(safe.apiToken, undefined);
-  assert.equal(safe.tokenEnv, undefined);
-  assert.equal(safe.shareKey, undefined);
-  assert.equal(safe.shareUrlEnv, undefined);
-  assert.deepEqual(safe.headers, { Accept: 'application/json' });
-  assert.equal(source.headers.Authorization, 'Bearer header-secret');
-  assert.deepEqual(stripAuthorizationHeaders({ authorization: 'x', 'x-test': 'y', Accept: 'ok' }), { Accept: 'ok' });
-});
-
 test('forwarded headers are trusted only for an explicitly listed proxy', () => {
   assert.equal(isTrustedProxy('10.0.0.8', ['10.0.0.0/8']), true);
   assert.equal(isTrustedProxy('203.0.113.8', ['10.0.0.0/8']), false);
@@ -96,19 +43,13 @@ test('client IP resolution uses the same flags for game and rate limiting', () =
     'x-forwarded-for': '203.0.113.10, 10.0.0.1',
   };
   assert.equal(resolveClientIp('172.17.0.1', headers, {
-    trustedProxyCidrs: ['172.17.0.1'],
-    trustCloudflareIp: false,
-    trustProxy: false,
+    trustedProxyCidrs: ['172.17.0.1'], trustCloudflareIp: false, trustProxy: false,
   }), '172.17.0.1');
   assert.equal(resolveClientIp('172.17.0.1', headers, {
-    trustedProxyCidrs: ['172.17.0.1'],
-    trustCloudflareIp: false,
-    trustProxy: true,
+    trustedProxyCidrs: ['172.17.0.1'], trustCloudflareIp: false, trustProxy: true,
   }), '203.0.113.10');
   assert.equal(resolveClientIp('172.17.0.1', headers, {
-    trustedProxyCidrs: ['172.17.0.1'],
-    trustCloudflareIp: true,
-    trustProxy: false,
+    trustedProxyCidrs: ['172.17.0.1'], trustCloudflareIp: true, trustProxy: false,
   }), '198.51.100.20');
 });
 
@@ -117,43 +58,4 @@ test('trusted proxy list rejects malformed and unsupported CIDRs', () => {
   assert.throws(() => validateTrustedProxyCidrs(['not-a-cidr']), /valid IP/);
   assert.throws(() => validateTrustedProxyCidrs(['2001:db8::/32']), /exact addresses/);
   assert.throws(() => validateTrustedProxyCidrs(['10.0.0.0/33']), /between 0 and 32/);
-});
-
-test('temporary share URLs are reduced to a same-origin temp_key without mutating config', () => {
-  const source = {
-    url: 'https://komari.example.com',
-    kind: 'komari',
-    shareUrlEnv: 'KOMARI_SHARE_URL',
-  };
-  const env = {
-    KOMARI_SHARE_URL: 'https://komari.example.com/?temp_key=b1w3hcra',
-  };
-  assert.equal(resolveSourceShareKey(source, env), 'b1w3hcra');
-  assert.equal(resolveSource(source, env).shareKey, 'b1w3hcra');
-  assert.equal(resolveSourceShareKey(source, {
-    KOMARI_SHARE_URL: 'https://evil.example.com/?temp_key=stolen',
-  }), undefined);
-  assert.equal(source.shareKey, undefined);
-});
-
-test('credentials are refused for non-loopback plaintext HTTP probes', async () => {
-  const result = await readProbe('http://status.example.test', { token: 'secret' });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /HTTPS/);
-  const shareResult = await readProbe('http://status.example.test', { shareKey: 'share-secret' });
-  assert.equal(shareResult.ok, false);
-  assert.match(shareResult.error, /HTTPS/);
-});
-
-test('apiBase extraction and source tokenEnv resolution are pure helpers', () => {
-  assert.deepEqual(
-    extractApiBases('<meta name="apiBase" content="https://api.example.test, https://other.example.test">'),
-    ['https://api.example.test', 'https://other.example.test']
-  );
-  const source = { url: 'https://panel.example.test', tokenEnv: 'PANEL_TOKEN' };
-  assert.equal(resolveSourceToken(source, { PANEL_TOKEN: 'secret' }), 'secret');
-  assert.equal(resolveSource(source, { PANEL_TOKEN: 'secret' }).token, 'secret');
-  assert.equal(resolveSource({ kind: 'komari', tokenEnv: 'KOMARI_API_KEY' }, { KOMARI_API_KEY: 'raw-key' }).token, 'Bearer raw-key');
-  assert.equal(source.token, undefined);
-  assert.equal(isSameOrigin('https://example.test/path', 'https://example.test/other'), true);
 });

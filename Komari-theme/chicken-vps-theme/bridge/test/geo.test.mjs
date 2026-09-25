@@ -25,5 +25,7 @@ test('geo config rejects plaintext/unknown providers', () => {
     () => normalizeConfig({ geo: { providers: ['ip-api.com'] } }, 'config.json'),
     /config\.json\.geo\.providers\[0\]/
   );
+  assert.throws(() => normalizeConfig({ geo: { providers: 'ipwho.is' } }, 'config.json'), /config\.json\.geo\.providers/);
+  assert.throws(() => normalizeConfig({ geo: null }, 'config.json'), /config\.json\.geo/);
   assert.equal(normalizeConfig({}, 'config.json').geo.externalLookup, false);
 });

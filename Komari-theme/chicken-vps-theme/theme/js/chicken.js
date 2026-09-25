@@ -1,5 +1,5 @@
-// 程序化低多边形鸡：建模（基本几何体拼装）、动作（走路摇摆/啄击/被啄晕/翅膀）、
-// 头顶名牌（本地 Unicode 国旗 + AS号·品种 + 血条）。
+// 程序化低多边形鸡：建模、动作和头顶名牌。
+// Komari 节点使用只读数据卡；多人玩家使用普通名牌和血条。
 
 import * as THREE from 'three';
 import { CONF, ST_DEAD, ST_PECK, ST_AIR, ST_RUN, ST_FLAP } from '/shared/physics.js';
@@ -18,24 +18,8 @@ function labelMode() {
   return document.body?.dataset?.labelMode || 'full';
 }
 
-// 网站鸡离线原因（err 由服务端分类下发）：
-//   'unreachable'          → 无法连接（超时/拒绝/DNS 失败）
-//   '404'                  → 页面不存在
-//   'http:<code>'          → 服务异常（如 503）
-//   'cf:<code>'            → Cloudflare 报源站失联（520~527 / 错误页特征）
-// VPS 探针鸡没有 err，返回空串 → 名牌保持通用的「离线」。
-function siteDownReason(s) {
-  const e = s && s.err ? String(s.err) : '';
-  if (!e) return '';
-  if (e === 'unreachable') return '无法连接';
-  if (e === '404') return '404 不存在';
-  if (e.startsWith('cf:')) return 'CF源站失联';
-  const m = e.match(/^http:(\d+)/);
-  return m ? `HTTP ${m[1]}` : '';
-}
-
 // ---- 共享渲染资产 ----------------------------------------------------------
-// 每只鸡约 20 个几何体，25+ 只探针鸡就是 500+ 份完全相同的 BoxGeometry。
+// 每只鸡约 20 个几何体，25+ 只 Komari 节点就是 500+ 份完全相同的 BoxGeometry。
 // 这些几何体/材质从不变异，做成模块级共享：userData.shared = true，
 // dispose/disposeGroup 见到这个标记就跳过（否则删一只鸡会拆掉全场的共享资产）。
 // 注意：bodyMat/wingMat/tailMat 不能共享 —— 受击闪红（emissive）与离线变灰
@@ -105,7 +89,7 @@ function roundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
-// 探针数值格式化（输入 KB / 字节）
+// Komari 节点数值格式化（输入 KB / 字节）
 const fmtKb = (v) => v >= 1024 * 1024 * 1024 ? `${(v / 1024 / 1024 / 1024).toFixed(1)}T`
   : v >= 1024 * 1024 ? `${(v / 1024 / 1024).toFixed(1)}G`
   : v >= 1024 ? `${(v / 1024).toFixed(1)}M` : `${v.toFixed(0)}K`;
@@ -131,8 +115,9 @@ function ring(g, cx, cy, r, pct, color, label) {
 export class Chicken {
   constructor(colorIdx, info, isMe) {
     this.info = info;             // {name, flag, asn}
+    this.readonly = !!info.readonly;
     this.isMe = isMe;
-    this.offline = !!info.offline;  // 离线探针鸡：躺倒、不可选中、名牌只显示"离线"
+    this.offline = !!info.offline;  // 离线 Komari 节点：躺倒，名牌只显示“离线”
     this.t = Math.random() * 10;
     this.walkPhase = 0;
     this.speed = 0;
@@ -227,13 +212,11 @@ export class Chicken {
   }
 
   buildPlate() {
-    const stats = !!this.info.stats;           // 探针小鸡：大号数据名牌
-    const site = stats && this.info.stats.site; // 网站鸡：紧凑延迟卡片
-    // 离线只显示「名字 + 离线」，用一张紧凑卡片即可
+    const stats = !!this.info.stats;
     const off = this.offline && stats;
     const c = document.createElement('canvas');
-    c.width = off ? 260 : site ? 280 : stats ? 380 : 256;
-    c.height = off ? 76 : site ? 110 : stats ? 170 : 76;
+    c.width = off ? 260 : stats ? 380 : 256;
+    c.height = off ? 76 : stats ? 170 : 76;
     this.plateCanvas = c;
     this.plateCtx = c.getContext('2d');
     this.tex = new THREE.CanvasTexture(c);
@@ -241,7 +224,6 @@ export class Chicken {
     this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex, depthTest: true, transparent: true }));
     this.sprite.visible = labelMode() !== 'off';
     if (off) this.sprite.scale.set(2.0, 0.58, 1);
-    else if (site) this.sprite.scale.set(2.2, 0.86, 1);
     else if (stats) this.sprite.scale.set(2.9, 1.3, 1);
     else this.sprite.scale.set(1.5, 0.45, 1);
     // 名牌挂在一个「反旋转容器」下：鸡侧翻倒地时，这个容器反向转回来，
@@ -250,7 +232,7 @@ export class Chicken {
     // 倒地时由 update() 抬高 anchor.position.y，让卡片从尸体上方让开。
     this.plateAnchor = new THREE.Group();
     this.plateAnchor.rotation.z = -this.group.rotation.z;
-    this.sprite.position.y = off ? 0.85 : site ? 1.3 : stats ? 1.45 : 1.16;
+    this.sprite.position.y = off ? 0.85 : stats ? 1.45 : 1.16;
     this.plateAnchor.add(this.sprite);
     this.group.add(this.plateAnchor);
     this.drawPlate();
@@ -269,14 +251,11 @@ export class Chicken {
       return this.drawCompactPlate();
     }
     const offPlate = this.offline && this.info.stats;
-    const sitePlate = this.info.stats?.site;
     if (offPlate) this.sprite.scale.set(2.0, 0.58, 1);
-    else if (sitePlate) this.sprite.scale.set(2.2, 0.86, 1);
     else if (this.info.stats) this.sprite.scale.set(2.9, 1.3, 1);
     else this.sprite.scale.set(1.5, 0.45, 1);
     if (this.info.stats) {
       if (this.offline) return this.drawOfflinePlate();
-      if (this.info.stats.site) return this.drawSitePlate();
       return this.drawStatsPlate();
     }
     const g = this.plateCtx, W = 256, H = 76;
@@ -331,7 +310,7 @@ export class Chicken {
     g.fillStyle = online ? '#7ec850' : '#e05252';
     g.beginPath(); g.arc(wide ? 38 : 28, cy, wide ? 13 : 10, 0, Math.PI * 2); g.fill();
 
-    let name = String(this.info.name || '').replace(/^探针鸡·/, '');
+    let name = String(this.info.name || '');
     g.fillStyle = '#fff';
     g.font = `bold ${wide ? 30 : 22}px "Microsoft YaHei","PingFang SC",sans-serif`;
     g.textAlign = 'left';
@@ -350,7 +329,7 @@ export class Chicken {
   }
 
   setInfo(info) {
-    // 各算一次即可：stats 是服务端下发的纯数据，stringify 稳定且不会循环引用
+    // 各算一次即可：stats 是 Komari 客户端生成的纯数据，stringify 稳定且不会循环引用
     const oldStats = JSON.stringify(this.info.stats);
     const newStats = JSON.stringify(info.stats);
     const statsChanged = oldStats !== newStats;
@@ -361,6 +340,7 @@ export class Chicken {
     const changed = colorChanged || offlineChanged || this.info.flag !== info.flag || this.info.name !== info.name ||
       this.info.maxHp !== info.maxHp || statsChanged;
     this.info = info;
+    this.readonly = !!info.readonly;
     if (offlineChanged) {
       this.offline = !!info.offline;
       // 卡的尺寸/字号不同，必须整张重建；旧 anchor（含 sprite）与贴图要释放
@@ -385,7 +365,7 @@ export class Chicken {
     if (changed) this.drawPlate();
   }
 
-  // 体型跟随机器负载（服务器下发 scale）
+  // Komari 节点体型跟随机器负载。
   setScale(s) {
     if (this.scaleApplied === s) return;
     this.scaleApplied = s;
@@ -404,7 +384,7 @@ export class Chicken {
     });
   }
 
-  // 离线探针鸡的名牌：断线图标在左侧垂直居中，名字第一行、「离线」胶囊第二行。
+  // 离线 Komari 节点的名牌：断线图标在左侧，名字第一行、“离线”标签第二行。
   // 之前胶囊在名字右侧会压住长名字；图标垂直居中跨两行时，下缘又伸进
   // 卡片下半部、容易被倒地的尸体挡住一小块 —— 现在图标收进第一行，
   // 卡片整体也抬高一点（buildPlate 里离线 y=0.85）。
@@ -432,14 +412,12 @@ export class Chicken {
     g.fillStyle = '#e8e8e8';
     g.font = 'bold 22px "Microsoft YaHei","PingFang SC",sans-serif';
     g.textBaseline = 'middle';
-    let name = String(this.info.name || '').replace(/^探针鸡·/, '');
+    let name = String(this.info.name || '');
     while (g.measureText(name).width > W - 76 && name.length > 2) name = name.slice(0, -1);
     g.fillText(name, 54, 24);
 
-    // 「离线」标签：名字下方的小胶囊（与名字左对齐）。
-    // 网站鸡带离线原因（404 / 503 / CF源站失联 / 无法连接），一眼看出为什么挂了；
-    // VPS 探针鸡没有原因信息，保持通用的「离线」。
-    const label = siteDownReason(this.info.stats) || '离线';
+    // “离线”标签放在名字下方。
+    const label = '离线';
     g.font = 'bold 17px "Microsoft YaHei","PingFang SC",sans-serif';
     const tw = g.measureText(label).width;
     const bw = tw + 22, bh = 25, bx = 54, by = 40;
@@ -454,54 +432,7 @@ export class Chicken {
     this.tex.needsUpdate = true;
   }
 
-  // 网站鸡的延迟卡片：域名/在线状态两行同列对齐（x=54）+ 右上角旗标 + 血条
-  drawSitePlate() {
-    const g = this.plateCtx, W = 280, H = 110;
-    g.clearRect(0, 0, W, H);
-    g.fillStyle = 'rgba(15,25,10,0.6)';
-    roundRect(g, 2, 2, W - 4, H - 4, 16); g.fill();
-
-    const s = this.info.stats;
-    // 旗标使用本地 Unicode 字符，不请求外部图片服务。
-    const code = s?.region;
-    const e = code && flagEntry(code);
-    if (e?.emoji) {
-      g.fillStyle = '#fff'; g.font = '25px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
-      g.textBaseline = 'middle';
-      g.fillText(e.emoji, W - 54, 26);
-    } else if (code && /^[A-Z]{2}$/.test(String(code).toUpperCase())) {
-      g.fillStyle = '#fff'; g.font = 'bold 19px sans-serif'; g.textBaseline = 'middle';
-      g.fillText(String(code).toUpperCase(), W - 52, 26);
-    }
-
-    g.fillStyle = '#fff';
-    g.font = 'bold 22px "Microsoft YaHei","PingFang SC",sans-serif';
-    let name = this.info.name.replace(/^探针鸡·/, '');
-    while (g.measureText(name).width > W - 70 && name.length > 4) name = name.slice(0, -2);
-    g.fillText(name, 54, 26);
-
-    if (s && typeof s.latency === 'number') {
-      g.font = 'bold 24px "Microsoft YaHei",sans-serif';
-      g.fillStyle = '#7ec850';
-      g.fillText('网站在线', 54, 64);
-    } else {
-      g.font = '17px Consolas,monospace';
-      g.fillStyle = '#cfe8b0';
-      g.fillText('检测网站中…', 54, 62);
-    }
-
-    // 血条
-    const bw = W - 28, bh = 8, bx = 14, by = H - 16;
-    g.fillStyle = 'rgba(255,255,255,0.22)';
-    roundRect(g, bx, by, bw, bh, 4); g.fill();
-    const max = this.info.maxHp || CONF.maxHp;
-    const pct = Math.max(0, this.hp) / max;
-    g.fillStyle = pct > 0.5 ? '#7ec850' : pct > 0.25 ? '#e8b23a' : '#e05252';
-    if (pct > 0.01) { roundRect(g, bx, by, Math.max(bh, bw * pct), bh, 4); g.fill(); }
-    this.tex.needsUpdate = true;
-  }
-
-  // 探针小鸡的数据名牌：旗标 + 名称 + CPU/RAM 圆圈 + 每秒/DISK/流量/在线 + 型号 + 血条
+  // Komari 节点的数据名牌：旗标 + 名称 + CPU/RAM 圆圈 + 每秒/流量/在线 + 系统
   drawStatsPlate() {
     const g = this.plateCtx, W = 380, H = 170;
     g.clearRect(0, 0, W, H);
@@ -526,7 +457,7 @@ export class Chicken {
     g.fillStyle = '#fff';
     g.font = 'bold 22px "Microsoft YaHei","PingFang SC",sans-serif';
     g.textBaseline = 'middle';
-    let name = this.info.name.replace(/^探针鸡·/, '');
+    let name = this.info.name;
     while (g.measureText(name).width > 246 && name.length > 4) name = name.slice(0, -2);
     g.fillText(name, 66, 26);
 
@@ -557,21 +488,24 @@ export class Chicken {
     } else {
       g.font = '17px Consolas,monospace';
       g.fillStyle = '#cfe8b0';
-      g.fillText('探针数据加载中…', 16, 70);
+      g.fillText('监控数据加载中…', 16, 70);
     }
 
-    // 血条（细）
-    const bw = W - 28, bh = 7, bx = 14, by = H - 12;
-    g.fillStyle = 'rgba(255,255,255,0.22)';
-    roundRect(g, bx, by, bw, bh, 4); g.fill();
-    const max = this.info.maxHp || CONF.maxHp;
-    const pct = Math.max(0, this.hp) / max;
-    g.fillStyle = pct > 0.5 ? '#7ec850' : pct > 0.25 ? '#e8b23a' : '#e05252';
-    if (pct > 0.01) { roundRect(g, bx, by, Math.max(bh, bw * pct), bh, 4); g.fill(); }
+    // 浏览器直读节点是只读监控实体，不显示误导性的战斗血条。
+    if (!this.readonly) {
+      const bw = W - 28, bh = 7, bx = 14, by = H - 12;
+      g.fillStyle = 'rgba(255,255,255,0.22)';
+      roundRect(g, bx, by, bw, bh, 4); g.fill();
+      const max = this.info.maxHp || CONF.maxHp;
+      const pct = Math.max(0, this.hp) / max;
+      g.fillStyle = pct > 0.5 ? '#7ec850' : pct > 0.25 ? '#e8b23a' : '#e05252';
+      if (pct > 0.01) { roundRect(g, bx, by, Math.max(bh, bw * pct), bh, 4); g.fill(); }
+    }
     this.tex.needsUpdate = true;
   }
 
   setHp(hp) {
+    if (this.readonly) return;
     if (hp !== this.hp) {
       this.hp = hp;
       this.drawPlate();
@@ -599,7 +533,7 @@ export class Chicken {
     this.flashT = Math.max(0, this.flashT - dt);
     this.bodyMat.emissive.setHex(this.flashT > 0 ? 0x882222 : 0x000000);
 
-    // 被啄晕：整体侧翻。离线（探针挂了）用同样的倒地姿态，但额外压暗一点，
+    // 被啄晕：整体侧翻。离线节点用同样的倒地姿态，但额外压暗一点，
     // 和"被打倒、3 秒后复活"区分开 —— 离线是不会自己站起来的。
     const targetZ = dead ? 1.45 : 0;
     this.group.rotation.z += (targetZ - this.group.rotation.z) * Math.min(1, dt * 8);
@@ -642,7 +576,7 @@ export class Chicken {
         moved = this._movedSm;
       }
       this.walkPhase += moved * (isNpc ? 9 : 3.6);
-      // 玩家鸡恢复最初的轻微步伐；探针鸡保持大幅摇晃
+      // 玩家鸡恢复最初的轻微步伐；只读 Komari 节点保持大幅摇晃
       const moveAmp = isNpc ? Math.min(1, speed / 1.6) : Math.min(1, speed / CONF.walkSpeed);
       const swing = Math.sin(this.walkPhase) * (isNpc ? 0.85 : 0.75) * moveAmp;
       this.legL.rotation.x = swing;

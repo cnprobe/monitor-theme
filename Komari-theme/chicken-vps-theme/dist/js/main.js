@@ -1,8 +1,9 @@
 // 总装：渲染器、第三人称操控、本地预测 + 远端插值、事件表现、HUD/遮罩流程。
 
 import * as THREE from 'three';
-import { CONF, ST_DEAD, ST_PECK, ST_AIR, ST_RUN, ST_WALK, ST_FLAP, stepBody, groundHeight } from '/shared/physics.js';
+import { CONF, WORLD_HALF, ST_DEAD, ST_PECK, ST_AIR, ST_RUN, ST_WALK, ST_FLAP, stepBody, groundHeight, buildObstacles, resolveCircle } from '/shared/physics.js';
 import { Net } from './net.js';
+import { KomariBrowserClient } from './komari-client.js';
 import { buildScene, buildWorld } from './world.js';
 import { Chicken } from './chicken.js';
 import { Npc } from './npc.js';
@@ -27,6 +28,7 @@ $('app').appendChild(renderer.domElement);
 
 const { scene, camera } = buildScene(renderer, { lowPower: compact });
 const net = new Net();
+const komari = new KomariBrowserClient();
 const hud = new HUD();
 const sfx = new Sfx();
 const feathers = new Feathers(scene);
@@ -34,6 +36,10 @@ const feathers = new Feathers(scene);
 let myId = null, worldBuilt = false;
 const roster = new Map();          // id -> {name,color,flag,...}
 const chickens = new Map();        // id -> Chicken
+const localProbeIds = new Set();
+const localProbeStates = new Map();
+let directProbeHealth = null;
+let directUnauthorizedNoticeShown = false;
 let obstacles = [];
 const snapBuf = [];                // {t, ps:Map(id -> entry)}
 const RENDER_DELAY = 130;
@@ -83,6 +89,155 @@ function lerpAngle(a, b, t) {
 }
 function dist2Me(x, z) { return Math.hypot(x - body.x, z - body.z); }
 
+function stableHash(value) {
+  let hash = 2166136261;
+  const source = String(value || '');
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function updateProbeHealth() {
+  if (directProbeHealth) hud.setProbeHealth(directProbeHealth);
+}
+
+function spawnLocalProbeState(id, key) {
+  const hash = stableHash(key);
+  const angle = (hash % 360) * Math.PI / 180;
+  const radius = 6 + ((hash >>> 8) % 150) / 10;
+  const state = {
+    body: { x: Math.cos(angle) * radius, y: 0, z: Math.sin(angle) * radius, vy: 0, kx: 0, kz: 0 },
+    inp: { mx: 0, mz: 0, run: false, jump: false, yaw: angle + Math.PI, pid: id },
+    turn: 1 + (hash % 240) / 100,
+    turnIndex: 0,
+  };
+  resolveCircle(state.body, CONF.radius, obstacles);
+  state.body.y = groundHeight(state.body.x, state.body.z);
+  localProbeStates.set(id, state);
+  return state;
+}
+
+function removeLocalProbeNodes() {
+  for (const id of [...localProbeIds]) {
+    chickens.get(id)?.dispose(scene);
+    chickens.delete(id);
+    roster.delete(id);
+    localProbeStates.delete(id);
+  }
+  localProbeIds.clear();
+  if (!net.connected || myId === 'local') hud.update(Array.from(localSnapshot().values()), roster);
+  updateProbeHealth();
+}
+
+function localSnapshot() {
+  const snapshot = new Map();
+  if (myId === 'local') snapshot.set('local', ['local', body.x, body.y, body.z, localYaw, 0, CONF.maxHp, 0]);
+  for (const id of localProbeIds) {
+    const state = localProbeStates.get(id);
+    const info = roster.get(id);
+    if (!state || !info) continue;
+    snapshot.set(id, [id, state.body.x, state.body.y, state.body.z, state.inp.yaw, info.offline ? ST_DEAD : 0, 100, 0]);
+  }
+  return snapshot;
+}
+
+function syncLocalProbeNodes(nodes) {
+  if (!worldBuilt) ensureLocalWorld();
+  const seen = new Set();
+  const usedIds = new Set([...chickens.keys()].filter(id => Number(id) > 0));
+  for (const node of nodes) {
+    if (!node?.key || seen.has(node.key)) continue;
+    seen.add(node.key);
+    // Map 以负数 id 为键；通过稳定 key 找到已有模型，避免每次刷新更换实体 id。
+    let id = null;
+    for (const candidate of localProbeIds) {
+      if (localProbeStates.get(candidate)?.key === node.key) { id = candidate; break; }
+    }
+    if (id === null) {
+      let hash = stableHash(node.key) & 0x7fffffff;
+      id = -(hash + 1);
+      while (usedIds.has(id) || chickens.has(id)) id -= 1;
+      usedIds.add(id);
+      localProbeIds.add(id);
+      const state = spawnLocalProbeState(id, node.key);
+      state.key = node.key;
+    }
+    const cpu = Math.max(0, Math.min(100, Number(node.cpu) || 0));
+    const info = {
+      id,
+      name: String(node.name || node.key).slice(0, 120),
+      color: stableHash(`color:${node.key}`) % 5,
+      scale: +(1 + cpu / 100 * 0.35).toFixed(3),
+      flag: null,
+      asn: null,
+      asName: null,
+      source: 'komari', readonly: true, networked: false, collidable: false,
+      npc: true,
+      type: 'node',
+      maxHp: 100,
+      stats: node,
+      offline: node.online !== true,
+    };
+    roster.set(id, info);
+    let chicken = chickens.get(id);
+    if (!chicken) {
+      chicken = new Chicken(info.color, info, false);
+      chicken.ready = true;
+      const state = localProbeStates.get(id);
+      if (state) {
+        chicken.group.position.set(state.body.x, state.body.y, state.body.z);
+        chicken.group.rotation.y = state.inp.yaw;
+      }
+      chickens.set(id, chicken);
+      scene.add(chicken.group);
+    } else {
+      chicken.setInfo(info);
+    }
+    chicken.setScale?.(info.scale);
+  }
+  for (const id of [...localProbeIds]) {
+    if (!seen.has(localProbeStates.get(id)?.key)) {
+      chickens.get(id)?.dispose(scene);
+      chickens.delete(id);
+      roster.delete(id);
+      localProbeStates.delete(id);
+      localProbeIds.delete(id);
+    }
+  }
+  if (!net.connected || myId === 'local') hud.update(Array.from(localSnapshot().values()), roster);
+}
+
+function updateLocalProbeChicks(dt) {
+  for (const id of localProbeIds) {
+    const chicken = chickens.get(id);
+    const info = roster.get(id);
+    const state = localProbeStates.get(id);
+    if (!chicken || !info || !state) continue;
+    if (info.offline) {
+      chicken.group.position.set(state.body.x, state.body.y, state.body.z);
+      chicken.update(dt, ST_DEAD, 0, state.body.y);
+      continue;
+    }
+    state.turn -= dt;
+    if (state.turn <= 0) {
+      state.turnIndex += 1;
+      const hash = stableHash(`${info.stats?.key || id}:${state.turnIndex}`);
+      const angle = (hash % 360) * Math.PI / 180;
+      state.inp.mx = Math.cos(angle);
+      state.inp.mz = Math.sin(angle);
+      state.inp.yaw = Math.atan2(state.inp.mx, state.inp.mz);
+      state.turn = 1.5 + ((hash >>> 8) % 250) / 100;
+    }
+    state.inp.speed = 0.7 + Math.min(1.5, (Number(info.stats?.cpu) || 0) / 100);
+    stepBody(state.body, state.inp, obstacles, dt);
+    chicken.group.position.set(state.body.x, state.body.y, state.body.z);
+    chicken.group.rotation.y = state.inp.yaw;
+    chicken.update(dt, ST_WALK, state.inp.speed, state.body.y);
+  }
+}
+
 function applyThemeSettings(data) {
   const settings = data.theme_settings || {};
   const siteName = String(data.sitename || 'Komari 养鸡场').trim();
@@ -95,20 +250,21 @@ function applyThemeSettings(data) {
 
   sfx.muted = settings.sound_enabled === false;
   document.body.classList.toggle('hide-controls', settings.show_controls === false);
+  komari.configure({
+    probe_limit: settings.probe_limit,
+    probe_order: settings.probe_order,
+    probe_refresh_seconds: settings.probe_refresh_seconds,
+    seed: `${location.host}:${siteName}`,
+  });
+  void komari.start();
   if (!net.name && settings.player_name) net.name = String(settings.player_name).slice(0, 12);
   if (!worldBuilt) hud.setMe(net.name || settings.player_name || '小鸡');
 }
 
 function ensureLocalWorld() {
   if (!worldBuilt) {
-    const half = 30;
-    obstacles = [
-      { type: 'fence', x: -11, z: -8, w: 8, d: 0.3, h: 1.6 },
-      { type: 'fence', x: 11, z: 7, w: 0.3, d: 8, h: 1.6 },
-      { type: 'coop', x: 12, z: -12, w: 5, d: 4, h: 3.2 },
-      { type: 'trough', x: -8, z: 10, w: 4, d: 1.2, h: 0.7 },
-      { type: 'tree', x: -15, z: 13, w: 2, d: 2, h: 4.5 },
-    ];
+    const half = WORLD_HALF;
+    obstacles = buildObstacles();
     buildWorld(scene, { half, obstacles });
     worldBuilt = true;
   }
@@ -130,18 +286,36 @@ function ensureLocalWorld() {
     roster.set(myId, info);
     scene.add(chicken.group);
   }
+  hud.setMultiplayerActive(false);
   hud.onProfile = (patch) => {
     if (net.sendProfile(patch.name)) hud.setMe(net.name);
   };
-  hud.setBridgeState('missing', '本地模式');
+  hud.setBridgeState('missing', '单机模式');
   hud.setMe(net.name || '本地小鸡');
   hud.setSelfState(CONF.maxHp, 0, 0);
 }
 
 // ---------- 网络 ----------
+komari.on('nodes', nodes => syncLocalProbeNodes(nodes));
+komari.on('health', health => {
+  directProbeHealth = health;
+  updateProbeHealth();
+  if (health?.ok) directUnauthorizedNoticeShown = false;
+  if (health?.unauthorized) {
+    removeLocalProbeNodes();
+    if (!directUnauthorizedNoticeShown) {
+      directUnauthorizedNoticeShown = true;
+      hud.banner('请先登录 Komari，或使用有效的临时分享链接打开主题', 7000);
+    }
+  }
+});
+
 net.on('settings', applyThemeSettings);
 net.on('bridge', (state, detail) => {
   hud.setBridgeState(state, detail);
+  if (state === 'error' || state === 'reconnecting' || state === 'missing') {
+    hud.setMultiplayerActive(false);
+  }
   if ((state === 'error' || state === 'reconnecting') && !worldBuilt) {
     ensureLocalWorld();
     hud.setBridgeState(state, detail);
@@ -149,22 +323,27 @@ net.on('bridge', (state, detail) => {
 });
 net.on('bridge-unavailable', () => {
   ensureLocalWorld();
-  hud.banner('未配置伴生服务：当前为本地只读模式', 6000);
+  hud.banner('未配置多人服务：当前为单机模式，Komari 监控数据仍由浏览器读取', 6000);
 });
 net.on('bridge-error', (message) => {
   hud.banner(`伴生服务：${message.message || '未知错误'}`, 5000);
 });
 
 net.on('welcome', (m) => {
+  if (myId === 'local') {
+    chickens.get('local')?.dispose(scene);
+    chickens.delete('local');
+    roster.delete('local');
+  }
   myId = m.id;
   hud.myId = m.id;
+  hud.setMultiplayerActive(true);
   obstacles = m.obstacles;
   hud.onProfile = (patch) => net.sendProfile(patch.name);
   if (!worldBuilt) { buildWorld(scene, m); worldBuilt = true; }
 });
 
-net.on('roster', (list, probe, left) => {
-  hud.setProbeHealth(probe);
+net.on('roster', (list, left) => {
   hud.setLeftBoard(left);
   const seen = new Set();
   for (const info of list) {
@@ -172,7 +351,7 @@ net.on('roster', (list, probe, left) => {
     roster.set(info.id, info);
     let c = chickens.get(info.id);
     if (!c) {
-      // 大鹅用 Npc 模型；探针小鸡与玩家鸡共用 Chicken 模型（大小一致、随机毛色，名牌带数据）
+      // Bridge roster 只包含玩家与可选大鹅。
       c = info.npc && info.type === 'goose'
         ? new Npc(info)
         : new Chicken(info.color, info, info.id === myId);
@@ -182,26 +361,26 @@ net.on('roster', (list, probe, left) => {
     } else {
       c.setInfo(info);
     }
-    // 探针鸡的体型随机器 CPU 负载变化（服务器下发 scale）
     if (info.scale && c.setScale) c.setScale(info.scale);
     if (info.id === myId) {
       hud.setMe(info.name);
     }
   }
   for (const [id, c] of chickens) {
-    if (!seen.has(id)) { roster.delete(id); c.dispose(scene); chickens.delete(id); }
+    if (!seen.has(id) && !localProbeIds.has(id)) { roster.delete(id); c.dispose(scene); chickens.delete(id); }
   }
 });
 
 net.on('snapshot', (m) => {
   const ps = new Map();
   for (const e of m.ps) ps.set(e[0], e);
+  for (const [id, entry] of localSnapshot()) ps.set(id, entry);
   snapBuf.push({ t: performance.now(), ps });
   if (snapBuf.length > 40) snapBuf.shift();
   processEvents(m.ev || []);
   reconcile(ps.get(myId));
   // 标签页隐藏时跳过 HUD 的 DOM 写入（rAF 已停，写了也看不见，纯耗电）
-  if (!document.hidden) hud.update(m.ps, roster);
+  if (!document.hidden) hud.update(Array.from(ps.values()), roster);
   const mine = ps.get(myId);
   if (mine) {
     chickens.get(myId)?.setHp(mine[6]);
@@ -211,7 +390,8 @@ net.on('snapshot', (m) => {
 });
 
 net.on('drop', () => {
-  hud.banner('🔗 连接断开，正在重连…', 5000);
+  hud.setMultiplayerActive(false);
+  hud.banner('🔗 多人连接断开，正在重连…', 5000);
 });
 
 // 断线重连成功：服务端认出了令牌，战绩/毛色已恢复
@@ -351,6 +531,7 @@ function renderFrame(now) {
   lastT = now;
 
   if (worldBuilt) {
+    updateLocalProbeChicks(dt);
     // 输入向量（相机相对）。键盘与摇杆是**相加**的：两者都推同一方向不会叠加成
     // 双倍速度，因为 stepBody 会把长度 >1 的向量归一化。
     const fwd = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0)
@@ -364,7 +545,7 @@ function renderFrame(now) {
     moveInput.mz = moving ? fz * fwd + rz * str : 0;
     moveInput.run = !!(keys.ShiftLeft || keys.ShiftRight) || !!tc?.run;
     moveInput.jump = !!keys.Space || !!tc?.jump;
-    moveInput.pid = myId || 0; // 参与连跳段数哈希：与服务端一致（shared/physics.js）
+    moveInput.pid = Number(myId) || 0; // 参与连跳段数哈希：与服务端一致（shared/physics.js）
 
     const me = chickens.get(myId);
     const mySnap = snapBuf.length ? snapBuf[snapBuf.length - 1].ps.get(myId) : null;
@@ -375,7 +556,7 @@ function renderFrame(now) {
     // 周围实体的软分离（与服务器同一套速度冲量公式，重叠时能挤过去不再卡位）
     if (!dead) {
       for (const [id, c] of chickens) {
-        if (id === myId || !c.ready || c.offline) continue; // 离线躺倒的鸡不挡路
+        if (id === myId || localProbeIds.has(id) || !c.ready || c.offline) continue; // 浏览器监控鸡只读、不参与本地碰撞
         const p = c.group.position;
         const dx = p.x - body.x, dz = p.z - body.z;
         const d = Math.hypot(dx, dz) || 1e-6;
@@ -416,7 +597,7 @@ function renderFrame(now) {
     if (!s0 && snapBuf.length) { s0 = snapBuf[0]; s1 = snapBuf[1] || null; }
     if (s0) {
       for (const [id, c] of chickens) {
-        if (id === myId || !c.ready) continue;
+        if (id === myId || localProbeIds.has(id) || !c.ready) continue;
         const e0 = s0.ps.get(id);
         if (!e0) continue;
         const e1 = s1 && s1.ps.get(id);

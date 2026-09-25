@@ -19,6 +19,8 @@
 Komari-theme/chicken-vps-theme/
 ```
 
+Chicken Farm 使用单 ZIP 架构：主题浏览器直接读取同源 Komari；可选 Bridge 只负责多人游戏、大鹅和断线恢复，不接收任何 Komari 节点数据。
+
 ## Docker 镜像 CI
 
 仓库使用一个通用构建工作流：
@@ -55,7 +57,7 @@ chicken-vps-bridge-v*
 4. 为每个独立镜像使用唯一的 GHCR 镜像名和缓存范围。
 5. 只有推送对应的发布 Tag 才会构建并推送 GHCR 镜像；Pull Request 只做构建验证，不推送镜像。
 
-当前主题的完整配置、Docker 部署和 `.env` 说明见：
+当前主题的完整配置、单 ZIP 与可选多人 Bridge 部署说明见：
 
 ```text
 Komari-theme/chicken-vps-theme/README.md
@@ -67,7 +69,7 @@ Komari-theme/chicken-vps-theme/README.md
 chicken-vps-bridge-v<版本号>
 ```
 
-例如 `chicken-vps-bridge-v0.1.2` 只会发布 Chicken VPS Bridge 镜像；其他主题使用各自的 Tag 前缀，不会互相触发。
+例如 `chicken-vps-bridge-v0.2.0` 只会发布 Chicken VPS Bridge 镜像；其他主题使用各自的 Tag 前缀，不会互相触发。
 
 当前主题镜像：
 
@@ -78,7 +80,7 @@ ghcr.io/cnprobe/chicken-vps-bridge:latest
 对应的固定版本镜像示例：
 
 ```text
-ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.1.2
+ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.0
 ```
 
 主题 ZIP 由主题目录自己的 `npm run package` 生成；Docker 镜像和主题 ZIP 是两个独立产物。

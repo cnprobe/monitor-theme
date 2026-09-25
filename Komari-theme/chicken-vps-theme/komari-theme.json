@@ -5,10 +5,10 @@
   },
   "short": "ChickenFarm",
   "description": {
-    "zh-CN": "把 Komari 节点变成 3D 小鸡，并支持访客在线互啄的 companion 主题。",
-    "en": "A Komari companion theme that turns nodes into 3D chickens and supports multiplayer pecking."
+    "zh-CN": "单 ZIP 读取当前 Komari 节点，并可选连接极简多人 Bridge 进行互啄。",
+    "en": "A single ZIP reads current Komari nodes and optionally connects to a minimal multiplayer Bridge."
   },
-  "version": "0.1.2",
+  "version": "0.2.0",
   "author": "Komari Community",
   "url": "https://github.com/komari-monitor/komari-document",
   "preview": "preview.svg",
@@ -28,8 +28,8 @@
         "type": "string",
         "default": "",
         "help": {
-          "zh-CN": "例如 wss://chicken.example.com/ws。这里只能填写公开地址，切勿填写任何 Token；伴生服务的探针凭据必须保存在服务端。",
-          "en": "For example wss://chicken.example.com/ws. Put only a public URL here, never a token. Keep probe credentials on the companion service."
+          "zh-CN": "可选，例如 wss://chicken.example.com/ws。留空时 ZIP 会直接读取当前 Komari；填写后额外启用多人互啄。只能填写无查询参数的公开地址，切勿填写任何 Token。",
+          "en": "Optional, for example wss://chicken.example.com/ws. Leave empty for direct same-origin Komari data; set it to enable multiplayer. Use a public URL without query parameters; never put a token here."
         }
       },
       {
@@ -41,8 +41,8 @@
         "type": "number",
         "default": 10,
         "help": {
-          "zh-CN": "设置随机显示多少台 Komari 节点；填 0 表示使用 Bridge 服务端上限，超过服务端 maxProbeChicks 时会被自动限制。",
-          "en": "Randomly display this many Komari nodes. Use 0 for the Bridge server limit; values above maxProbeChicks are capped."
+          "zh-CN": "设置显示多少台 Komari 节点；填 0 表示显示全部。浏览器会按稳定随机种子选择，因此同一 Komari 站点的访客通常看到相同的一批。",
+          "en": "Display this many Komari nodes; use 0 for all. Selection uses a stable random seed so visitors on the same site normally see the same subset."
         }
       },
       {
@@ -57,6 +57,19 @@
         "help": {
           "zh-CN": "随机：保持一批稳定随机小鸡；按名称：按节点名称排序后取前 N 台。",
           "en": "Random keeps a stable random subset; name selects the first N nodes sorted by name."
+        }
+      },
+      {
+        "key": "probe_refresh_seconds",
+        "name": {
+          "zh-CN": "数据刷新间隔",
+          "en": "Data refresh interval"
+        },
+        "type": "number",
+        "default": 5,
+        "help": {
+          "zh-CN": "浏览器直接读取 Komari 实时数据的间隔，单位为秒；建议 3～15 秒。多人游戏同步仍由可选 Bridge 负责。",
+          "en": "Browser-side Komari data refresh interval in seconds; 3–15 seconds is recommended. The optional Bridge still handles multiplayer synchronization."
         }
       },
       {

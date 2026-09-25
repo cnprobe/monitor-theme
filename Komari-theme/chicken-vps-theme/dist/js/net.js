@@ -1,6 +1,5 @@
 // WebSocket 网络层：读取 Komari 公开主题设置，连接伴生服务并自动重连。
 
-const STORAGE_KEY = 'cf.bridge.url';
 const NAME_KEY = 'cf.name';
 const MAX_FRAME_BYTES = 512 * 1024;
 const MAX_ROSTER_ENTITIES = 500;
@@ -35,30 +34,6 @@ async function frameText(data) {
   return '';
 }
 
-function sanitizeStats(stats) {
-  if (!isObject(stats)) return null;
-  return {
-    cpu: safeNumber(stats.cpu, 0, 100, 0),
-    memU: safeNumber(stats.memU, 0, 1e15, 0),
-    memT: safeNumber(stats.memT, 0, 1e15, 0),
-    hddU: safeNumber(stats.hddU, 0, 1e15, 0),
-    hddT: safeNumber(stats.hddT, 0, 1e15, 0),
-    netTx: safeNumber(stats.netTx, 0, 1e15, 0),
-    netRx: safeNumber(stats.netRx, 0, 1e15, 0),
-    netIn: safeNumber(stats.netIn, 0, 1e15, 0),
-    netOut: safeNumber(stats.netOut, 0, 1e15, 0),
-    latency: safeNumber(stats.latency, 0, 1e9, 0),
-    uptime: safeText(stats.uptime, 64),
-    region: safeText(stats.region, 16),
-    type: safeText(stats.type, 160),
-    site: !!stats.site,
-    online: stats.online !== false,
-    os: safeText(stats.os, 80),
-    arch: safeText(stats.arch, 80),
-    err: safeText(stats.err, 120),
-  };
-}
-
 function sanitizeRosterInfo(info) {
   if (!isObject(info)) return null;
   const id = safeId(info.id);
@@ -70,34 +45,18 @@ function sanitizeRosterInfo(info) {
     maxHp: safeNumber(info.maxHp, 1, 1000, 100),
     scale: safeNumber(info.scale, 0.5, 2, 1),
     score: safeNumber(info.score, 0, 1e9, 0),
-    npc: !!info.npc,
-    type: safeText(info.type, 16),
-    offline: !!info.offline,
+    npc: info.npc === true && info.type === 'goose',
+    type: info.type === 'goose' ? 'goose' : '',
+    offline: false,
     flag: safeText(info.flag, 2),
     asn: info.asn === null || info.asn === undefined ? '' : safeText(String(info.asn), 32),
     asName: safeText(info.asName, 120),
-    stats: sanitizeStats(info.stats),
   };
 }
 
 function sanitizeRoster(list) {
   return (Array.isArray(list) ? list : []).slice(0, MAX_ROSTER_ENTITIES)
     .map(sanitizeRosterInfo).filter(Boolean);
-}
-
-function sanitizeProbe(probe) {
-  if (!isObject(probe)) return null;
-  return {
-    ok: probe.ok !== false,
-    error: safeText(probe.error, 160),
-    sources: (Array.isArray(probe.sources) ? probe.sources : []).slice(0, 100).map(source => ({
-      name: safeText(source?.name, 120),
-      ok: source?.ok !== false,
-      error: safeText(source?.error, 80),
-      warning: safeText(source?.warning, 80),
-      kept: safeNumber(source?.kept, 0, MAX_ROSTER_ENTITIES, 0),
-    })),
-  };
 }
 
 function sanitizeConf(conf) {
@@ -115,6 +74,7 @@ function sanitizeConf(conf) {
 function sanitizeWelcome(message) {
   return {
     t: 'w',
+    protocol: 2,
     id: safeId(message.id),
     conf: sanitizeConf(message.conf),
     half: safeNumber(message.half, 10, 1000, 48),
@@ -179,9 +139,21 @@ function isLocalDevelopmentHost() {
   return location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '[::1]';
 }
 
-async function loadPublicSettings() {
+export async function loadPublicSettings({
+  fetchImpl = typeof fetch === 'function' ? fetch.bind(globalThis) : null,
+  timeoutMs = 8000,
+} = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch('/api/public', { headers: { Accept: 'application/json' } });
+    if (!fetchImpl) return {};
+    const response = await fetchImpl('/api/public', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const raw = await response.text();
     if (frameSize(raw) > MAX_FRAME_BYTES) return {};
@@ -189,6 +161,8 @@ async function loadPublicSettings() {
     return payload && payload.data && typeof payload.data === 'object' ? payload.data : {};
   } catch {
     return {};
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -212,10 +186,8 @@ export function normalizeBridgeUrl(value) {
   const loopbackHost = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
   if (url.protocol === 'ws:' && !loopbackHost) return '';
   if (pageIsSecure && url.protocol !== 'wss:') return '';
-  if (url.username || url.password || url.hash) return '';
-  for (const key of url.searchParams.keys()) {
-    if (/(token|secret|password|api[_-]?key|auth)/i.test(key)) return '';
-  }
+  // 多人地址不需要 query；拒绝它可避免把令牌或会话参数误写进公开主题设置。
+  if (url.username || url.password || url.search || url.hash) return '';
   if (!url.pathname || url.pathname === '/') url.pathname = '/ws';
   return url.toString();
 }
@@ -254,9 +226,9 @@ export class Net {
     const queryOverride = new URLSearchParams(location.search).get('bridge');
     const settings = this.publicSettings.theme_settings || {};
     const configured = settings.bridge_url || settings.bridgeUrl || '';
-    // 只允许本机开发页使用 ?bridge= 或旧的本地存储覆盖，避免恶意链接把
-    // 访客的本地游戏会话令牌转发到任意 WebSocket。
-    const localOverride = isLocalDevelopmentHost() ? (queryOverride || readStorage(STORAGE_KEY)) : '';
+    // 只允许本机开发页使用 ?bridge=，避免恶意链接把访客的游戏恢复令牌
+    // 转发到任意 WebSocket。生产环境只接受 Komari 主题设置中的地址。
+    const localOverride = isLocalDevelopmentHost() ? queryOverride : '';
     this.endpoint = normalizeBridgeUrl(localOverride || configured);
     return this.endpoint;
   }
@@ -320,6 +292,13 @@ export class Net {
       try { message = JSON.parse(raw); } catch { return; }
       if (!message || typeof message !== 'object' || Array.isArray(message)) return;
       if (message.t === 'w') {
+        if (message.protocol !== 2) {
+          this.closing = true;
+          this.emit('bridge', 'error', 'Bridge 协议版本不兼容，需要 protocol 2');
+          this.emit('bridge-error', { t: 'error', message: 'Bridge 协议版本不兼容，需要 protocol 2' });
+          try { ws.close(1002, 'unsupported-protocol'); } catch { /* ignore */ }
+          return;
+        }
         const welcome = sanitizeWelcome(message);
         if (welcome.token) {
           this.token = welcome.token;
@@ -328,7 +307,7 @@ export class Net {
         }
         this.emit('welcome', welcome);
       } else if (message.t === 'r') {
-        this.emit('roster', sanitizeRoster(message.list), sanitizeProbe(message.probe), sanitizeRoster(message.left));
+        this.emit('roster', sanitizeRoster(message.list), sanitizeRoster(message.left));
       } else if (message.t === 's') {
         this.emit('snapshot', sanitizeSnapshot(message));
       } else if (message.t === 'resume') {
@@ -344,8 +323,7 @@ export class Net {
     if (!clean || [...clean].length > 12) return false;
     this.name = clean;
     writeStorage(NAME_KEY, clean);
-    this.send({ t: 'profile', name: clean });
-    return true;
+    return this.send({ t: 'profile', name: clean });
   }
 
   send(obj) {

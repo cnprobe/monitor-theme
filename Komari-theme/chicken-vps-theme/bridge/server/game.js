@@ -1,6 +1,5 @@
-// 权威游戏服务器：所有移动、碰撞、啄击/扇翅判定都在服务端算，
-// 客户端只上报操作意图（方向、疾跑、跳跃、朝向、攻击请求）。
-// NPC（牛/羊/鹅）也由服务器驱动：闲逛、被啄会跑、大白鹅会追人。
+// 权威多人游戏服务器：玩家移动、碰撞、啄击、扇翅、比分与断线恢复均由服务端计算。
+// Bridge 不读取任何 Komari 数据；可选 NPC 仅包括大白鹅。
 
 import { randomBytes } from 'crypto';
 import {
@@ -9,7 +8,6 @@ import {
 } from '../shared/physics.js';
 import { lookup } from './geo.js';
 import { resolveClientIp } from './security.js';
-import { Probe } from './probe.js';
 import cfg from './config.js';
 
 const BREEDS = ['芦花鸡', '三黄鸡', '乌骨鸡', '白羽鸡', '麻鸡', '北京油鸡', '小笨鸡', '丝毛乌鸡', '清远鸡', '战斗鸡', '珍珠鸡', '芦花战斗鸡'];
@@ -21,13 +19,10 @@ const N_COLORS = 5;
 // 全放大。MAX_SOCKETS 是「握手中+已连接」的硬顶，比 players 上限更早拦截半开连接。
 const MAX_PLAYERS = 60;   // 在场玩家人数上限（config.json 的 maxPlayers 可覆盖）
 const MAX_SOCKETS = 200;  // ws 侧连接硬顶（含还没走完 onConnection 的）
-const DEFAULT_PROBE_LIMIT = 10;
-const MAX_THEME_PROBE_LIMIT = 1000;
 const MAX_WS_BUFFERED_BYTES = 1_000_000;
 
-// 自定义资料（2026-09-21）：玩家可改名字。换图标功能已移除（第二十九轮），
-// 旧展示名里的图标前缀由客户端预填时剥掉，服务端不再组合图标。
-// 名字按 code point 数限制（emoji/中文都算 1 个），去掉零宽字符与多余空白。
+// 玩家可改名字；按 code point 数限制（emoji/中文都算 1 个），
+// 并去掉控制字符、零宽字符与多余空白。
 function validCustomName(s) {
   if (typeof s !== 'string') return null;
   s = s.replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g, '').replace(/\s+/g, ' ').trim();
@@ -36,46 +31,10 @@ function validCustomName(s) {
   return s;
 }
 
-// NPC 定义与行为参数（大鹅有领地意识，会追击靠近的鸡；数量由 config.json 的 geese 决定）
+// Bridge 只保留多人玩家与可选大鹅；Komari 监控数据由主题 ZIP 在浏览器内读取。
 const NPC_TYPE = {
   goose: { radius: 0.35, walk: 1.3, flee: 3.6, chase: 2.55, chaseRadius: 2.5, color: 2, maxHp: 60, peckDamage: 6, peckKnock: 3.2, peckCd: 1.2 },
-  // 探针小鸡：与玩家鸡同体型，CPU > 50% 时见谁啄谁。
-  // 疾跑（sprintSpeed/sprintTime）：被啄 1/3 概率触发，或网速 ≥5MB/s 随机触发——比逃跑/追击都快
-  chick: { radius: 0.38, walk: 1.0, flee: 3.4, chase: 2.6, chaseRadius: 3.5, color: 4, maxHp: 100, peckDamage: 6, peckKnock: 3.0, peckCd: 1.6,
-    sprintSpeed: 5.0, sprintTime: 1.6 },
-  // 网站鸡：网站可用性检测生成，卡片显示延迟；被啄会还击，但从不主动攻击
-  web: { radius: 0.38, walk: 1.0, flee: 3.4, chase: 2.6, chaseRadius: 3.5, color: 4, maxHp: 140, peckDamage: 5, peckKnock: 3.0, peckCd: 1.8 }
 };
-
-// 网速疾跑阈值：探针鸡当前上下行合计 ≥ 5MB/s（stats.netRx/netTx 单位 B/s）时随机疾跑
-const NET_SPRINT_BPS = 5 * 1024 * 1024;
-
-// 探针鸡 / 网站鸡的外观：毛色随机（和玩家鸡一致）；探针小鸡的体型仍跟机器负载
-// 挂钩（越忙越大），所以"机器忙不忙"看体型依然一眼可见，但每只鸡有自己的花色。
-const CHICK_PALETTES = 5; // 与前端 public/js/chicken.js 的 PALETTES 长度一致
-const safeText = (value, max = 120) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g, ' ').slice(0, max);
-
-// 由探针的稳定 key 派生一个 0..CHICK_PALETTES-1 的毛色档位。
-// 用 hash 而不是 Math.random()：同一个目标每次重连/刷新都得到同一身花色，
-// 不会"每次上线换一只鸡"，但不同目标之间是随机分布的。
-function chickLookIndex(key, fallbackStats) {
-  const s = String(key ?? '');
-  if (!s) {
-    // 没有稳定 key 时退回随机（例如临时实体）
-    return Math.floor(Math.random() * CHICK_PALETTES);
-  }
-  let h = 2166136261;                 // FNV-1a
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h) % CHICK_PALETTES;
-}
-
-function chickScale(stats) {
-  const cpu = Math.max(0, Math.min(100, +stats?.cpu || 0));
-  return +(1.0 + cpu / 100 * 0.35).toFixed(3); // 1.00 ~ 1.35
-}
 
 function extractIp(req, trustCf, trustedProxyCidrs = []) {
   return resolveClientIp(req.socket?.remoteAddress, req.headers, {
@@ -90,14 +49,6 @@ export class Game {
     this.cfg = serverCfg;
     this.wss = wss;
     this.maxPlayers = Math.min(MAX_SOCKETS, Math.max(1, Number(serverCfg.maxPlayers) || MAX_PLAYERS));
-    this.maxProbeChicks = Math.min(1000, Math.max(1, Number(serverCfg.maxProbeChicks) || 200));
-    this.maxNpcEntities = Math.min(2000, Math.max(1, Number(serverCfg.maxNpcEntities) || 500));
-    this.probeLimit = DEFAULT_PROBE_LIMIT;
-    this.probeOrder = 'random';
-    this.selectedProbeKeys = { chick: [], web: [] };
-    this.lastProbeList = [];
-    this.lastSiteList = [];
-    this.lastThemeSettingsError = null;
     this.exposeVisitorGeo = serverCfg.exposeVisitorGeo === true;
     this.players = new Map();
     this.pendingPlayers = 0;
@@ -110,18 +61,18 @@ export class Game {
     this.obstacles = buildObstacles();
     this.evQueue = [];
     this.tick = 0;
-    this.chickSeq = 0;
     this.time = 0; // 模拟时间（秒），与真实时钟保持同步
-    // 清理过期的断线会话，避免内存无限增长
-    setInterval(() => {
+    // 清理过期的断线会话，避免内存无限增长。
+    this.sessionCleanupTimer = setInterval(() => {
       const t = Date.now();
       for (const [tok, s] of this.sessions) if (s.expireAt < t) this.sessions.delete(tok);
     }, 30000);
+    this.sessionCleanupTimer.unref?.();
     // Windows 下 setInterval 粒度可达 62.5ms，直接按 50ms 步进会让模拟时间越走越慢，
     // 因此用真实流逝时间累加，按固定步长追帧。
     const STEP = 0.05;
     let acc = 0, last = Date.now();
-    setInterval(() => {
+    this.tickTimer = setInterval(() => {
       const t = Date.now();
       acc += Math.min(0.5, (t - last) / 1000);
       last = t;
@@ -129,37 +80,15 @@ export class Game {
       while (acc >= STEP && n < 10) { this.update(STEP); acc -= STEP; n++; }
       if (n >= 10) acc = 0; // 长时间卡顿后直接追平，不做雪崩式补帧
     }, 25);
+    this.tickTimer.unref?.();
 
     this.spawnNpcs();
+  }
 
-    // VPS 探针 → NPC 小鸡（每台机器一只；离线的仍留在场上但躺倒不可选中）
-    // probe.sources 是新的多源配置（可混用 7 类探针）；
-    // 未配置时回退到旧的 probe.url + probe.sites 形式。
-    const pcfg = this.cfg.probe || {};
-    const hasSources = Array.isArray(pcfg.sources) ? pcfg.sources.length > 0 : !!pcfg.sources;
-    this.probe = new Probe(hasSources ? pcfg.sources : pcfg.url, pcfg.interval, pcfg.sites, pcfg);
-    this.probe.onUpdate = (list) => {
-      this.lastProbeList = Array.isArray(list) ? list : [];
-      this.syncProbeChicks('chick', this.lastProbeList, s => s);
-    };
-    this.probe.onSitesUpdate = (list) => {
-      this.lastSiteList = Array.isArray(list) ? list : [];
-      this.syncProbeChicks('web', this.lastSiteList, s => ({
-        site: true, region: s.region, latency: s.latency, online: s.online, err: s.err || null
-      }));
-    };
-    this.probe.onHealth = (h) => {
-      this.probeHealth = h;
-      // 探针挂了要让场内玩家看得见，而不是数据静默停在旧值
-      this.broadcastRoster();
-    };
-    this.probeHealth = { ok: true, error: null, sources: [] };
-    this.probe.start();
-    this.themeSettingsTimer = setInterval(() => {
-      void this.refreshThemeSettings();
-    }, 15000);
-    this.themeSettingsTimer.unref?.();
-    void this.refreshThemeSettings();
+  close() {
+    clearInterval(this.sessionCleanupTimer);
+    clearInterval(this.tickTimer);
+    this.sessions.clear();
   }
 
   // ---- 连接生命周期 ------------------------------------------------------
@@ -197,7 +126,6 @@ export class Game {
     const p = {
       id, ws, ip, geo, token,
       name: breed,
-      customName: breed,   // 玩家自定义名；name 即 customName（换图标功能已移除）
       colorIdx: (id * 7 + breed.length) % N_COLORS,
       x: 0, y: 0, z: 0, vy: 0, kx: 0, kz: 0,
       yaw: 0, hp: CONF.maxHp, score: 0,
@@ -216,7 +144,9 @@ export class Game {
     ws.resume?.();
 
     this.send(p, {
-      t: 'w', id, conf: CONF, half: WORLD_HALF,
+      t: 'w', id, protocol: 2,
+      capabilities: { authoritativePlayers: true, geese: this.npcs.size > 0 },
+      conf: CONF, half: WORLD_HALF,
       obstacles: this.obstacles, colors: N_COLORS, token
     });
     this.broadcastRoster();
@@ -261,7 +191,9 @@ export class Game {
     this.sessions.set(nextToken, { player: p, expireAt: Date.now() + 45000 });
 
     this.send(p, {
-      t: 'w', id: p.id, conf: CONF, half: WORLD_HALF,
+      t: 'w', id: p.id, protocol: 2,
+      capabilities: { authoritativePlayers: true, geese: this.npcs.size > 0 },
+      conf: CONF, half: WORLD_HALF,
       obstacles: this.obstacles, colors: N_COLORS, token: nextToken, resumed: true
     });
     this.send(p, { t: 'resume', id: p.id, name: p.name, color: p.colorIdx, score: p.score });
@@ -298,7 +230,7 @@ export class Game {
 
   spawnNpcs() {
     // 大鹅数量由 config.json 的 geese 决定，随机位置入栏
-    const count = Math.min(100, this.maxNpcEntities, Math.max(0, this.cfg.geese ?? 2));
+    const count = Math.min(100, Math.max(0, this.cfg.geese ?? 2));
     for (let i = 0; i < count; i++) {
       const t = NPC_TYPE.goose;
       const n = {
@@ -319,13 +251,6 @@ export class Game {
   }
 
   updateNpc(n, dt, now) {
-    // 离线探针鸡：永远躺倒，不移动、不复活（由 syncProbeChicks 在恢复在线时唤起）
-    if (n.deadUntil === Infinity) {
-      n.inp.mx = 0; n.inp.mz = 0;
-      n.peckAnim = 0;
-      return;
-    }
-    // 被啄倒：原地侧翻，期满满血复活
     if (n.deadUntil > 0) {
       if (now >= n.deadUntil) {
         n.deadUntil = 0;
@@ -337,7 +262,7 @@ export class Game {
         return;
       }
     }
-    const t = NPC_TYPE[n.type];
+    const t = NPC_TYPE.goose;
     const inp = n.inp;
     n.timer -= dt;
     n.peckAnim = Math.max(0, n.peckAnim - dt);
@@ -350,57 +275,38 @@ export class Game {
       fleeing = true;
       if (n.timer <= 0) { n.state = 'idle'; n.timer = 1 + Math.random() * 2; }
     } else if (n.state === 'chase') {
-      // 追击：鹅盯玩家；探针鸡 CPU > 50% 主动出击，被啄后的还击则不受门控
-      if (n.type === 'chick' && !n.retaliate && (n.stats?.cpu || 0) <= 50) {
-        n.state = 'idle'; n.timer = 0.5; n.retaliate = false;
+      const best = this.findPrey(n, now, t.chaseRadius + 4);
+      if (best) {
+        const dx = best.x - n.x, dz = best.z - n.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 1.15) dir = [dx / d, dz / d];
+        else this.npcPeck(n, now, best);
       } else {
-        const best = this.findPrey(n, now, t.chaseRadius + 4);
-        if (best) {
-          const dx = best.x - n.x, dz = best.z - n.z;
-          const d = Math.hypot(dx, dz);
-          if (d > 1.15) dir = [dx / d, dz / d];
-          else this.npcPeck(n, now, best);
-        } else { n.state = 'idle'; n.timer = 0.5; n.retaliate = false; }
+        n.state = 'idle'; n.timer = 0.5;
       }
     } else if (n.state === 'wander') {
       const dx = n.target.x - n.x, dz = n.target.z - n.z;
       const d = Math.hypot(dx, dz);
       if (d < 0.6 || n.timer <= 0) { n.state = 'idle'; n.timer = 1.5 + Math.random() * 3.5; }
       else dir = [dx / d, dz / d];
-    } else { // idle
-      if (n.timer <= 0) {
-        if (Math.random() < 0.7) {
-          n.target = { x: (Math.random() * 2 - 1) * (WORLD_HALF - 4), z: (Math.random() * 2 - 1) * (WORLD_HALF - 4) };
-          n.state = 'wander';
-          n.timer = 7;
-          // 高网速探针鸡（上下行合计 ≥5MB/s）：换目标时 50% 概率来一段随机疾跑
-          if (n.type === 'chick'
-            && (n.stats?.netRx || 0) + (n.stats?.netTx || 0) >= NET_SPRINT_BPS
-            && Math.random() < 0.5) {
-            n.sprintUntil = now + 1.5 + Math.random(); // 疾跑 1.5~2.5 秒
-          }
-        } else {
-          n.timer = 2 + Math.random() * 3;
-        }
+    } else if (n.timer <= 0) {
+      if (Math.random() < 0.7) {
+        n.target = { x: (Math.random() * 2 - 1) * (WORLD_HALF - 4), z: (Math.random() * 2 - 1) * (WORLD_HALF - 4) };
+        n.state = 'wander';
+        n.timer = 7;
+      } else {
+        n.timer = 2 + Math.random() * 3;
       }
     }
 
-    // 仇恨检测：鹅见玩家就上；探针鸡只在 CPU 负载超过 50% 时才会主动攻击
-    if (n.state !== 'chase' && n.state !== 'flee') {
-      const angry = n.type === 'goose' || (n.stats?.cpu || 0) > 50;
-      if (angry && this.findPrey(n, now, t.chaseRadius)) n.state = 'chase';
+    if (n.state !== 'chase' && n.state !== 'flee' && this.findPrey(n, now, t.chaseRadius)) {
+      n.state = 'chase';
     }
-
     if (dir) {
       inp.yaw = Math.atan2(dir[0], dir[1]);
       inp.mx = dir[0]; inp.mz = dir[1];
-      const sprinting = now < (n.sprintUntil || 0);
-      inp.speed = fleeing
-        ? (sprinting ? t.sprintSpeed : t.flee)
-        : (n.state === 'chase' ? t.chase : (sprinting ? t.sprintSpeed : t.walk));
-      inp.run = fleeing || n.state === 'chase' || sprinting;
-      // 小鸡的闲逛速度跟着 CPU 负载走：机器越忙小鸡越慌（疾跑时例外）
-      if (n.type === 'chick' && !fleeing && !sprinting) inp.speed = 0.8 + (n.stats?.cpu || 0) * 0.04;
+      inp.speed = fleeing ? t.flee : (n.state === 'chase' ? t.chase : t.walk);
+      inp.run = fleeing || n.state === 'chase';
     } else {
       inp.mx = 0; inp.mz = 0;
     }
@@ -408,178 +314,7 @@ export class Game {
     n.yaw = inp.yaw;
   }
 
-  // ---- 探针小鸡 ----------------------------------------------------------
-
-  async refreshThemeSettings() {
-    try {
-      const result = await this.probe.fetchThemeSettings();
-      if (result?.ok) {
-        this.lastThemeSettingsError = null;
-        this.setProbePreferences(result.settings);
-      } else if (result?.error && result.error !== this.lastThemeSettingsError) {
-        this.lastThemeSettingsError = result.error;
-        console.log('[theme] 读取主题设置失败:', result.error);
-      }
-    } catch (error) {
-      // 主题设置读取失败不影响 Komari 探针轮询；保留上一次显示偏好。
-      if (error.message !== this.lastThemeSettingsError) {
-        this.lastThemeSettingsError = error.message;
-        console.log('[theme] 读取主题设置失败:', error.message);
-      }
-    }
-  }
-
-  setProbePreferences(message) {
-    const raw = Number(message?.probeLimit ?? message?.probe_limit);
-    const limit = Number.isFinite(raw)
-      ? Math.max(0, Math.min(MAX_THEME_PROBE_LIMIT, Math.floor(raw)))
-      : this.probeLimit;
-    const requestedOrder = message?.probeOrder ?? message?.probe_order;
-    const order = requestedOrder === 'name' || requestedOrder === '按名称'
-      ? 'name'
-      : 'random';
-    if (limit === this.probeLimit && order === this.probeOrder) return;
-    const orderChanged = order !== this.probeOrder;
-    this.probeLimit = limit;
-    this.probeOrder = order;
-    if (orderChanged) this.selectedProbeKeys = { chick: [], web: [] };
-    // 立即重算，不必等下一轮探针轮询。
-    if (this.lastProbeList.length) this.syncProbeChicks('chick', this.lastProbeList, s => s);
-    if (this.lastSiteList.length) {
-      this.syncProbeChicks('web', this.lastSiteList, s => ({
-        site: true, region: s.region, latency: s.latency, online: s.online, err: s.err || null
-      }));
-    }
-  }
-
-  probeItemKey(item) {
-    return String(item?.key || item?.url || item?.name || '').slice(0, 256);
-  }
-
-  selectProbeItems(type, source, available) {
-    const hardMax = Math.min(this.maxProbeChicks, Math.max(0, available));
-    if (!hardMax || !source.length) {
-      this.selectedProbeKeys[type] = [];
-      return [];
-    }
-    const requested = this.probeLimit > 0 ? this.probeLimit : this.maxProbeChicks;
-    const limit = Math.min(hardMax, requested);
-    if (this.probeOrder === 'name') {
-      const sorted = source.slice().sort((a, b) => {
-        const an = String(a?.name || a?.key || a?.url || '');
-        const bn = String(b?.name || b?.key || b?.url || '');
-        return an.localeCompare(bn, 'zh-CN');
-      });
-      const selected = sorted.slice(0, limit);
-      this.selectedProbeKeys[type] = selected.map(item => this.probeItemKey(item));
-      return selected;
-    }
-
-    const byKey = new Map();
-    for (const item of source) {
-      const key = this.probeItemKey(item);
-      if (key && !byKey.has(key)) byKey.set(key, item);
-    }
-    const selected = [];
-    const selectedKeys = new Set();
-    for (const key of this.selectedProbeKeys[type] || []) {
-      const item = byKey.get(key);
-      if (item && selected.length < limit && !selectedKeys.has(key)) {
-        selected.push(item);
-        selectedKeys.add(key);
-      }
-    }
-    const remaining = [...byKey.values()].filter(item => !selectedKeys.has(this.probeItemKey(item)));
-    for (let i = remaining.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
-    }
-    for (const item of remaining) {
-      if (selected.length >= limit) break;
-      const key = this.probeItemKey(item);
-      if (key && !selectedKeys.has(key)) {
-        selected.push(item);
-        selectedKeys.add(key);
-      }
-    }
-    this.selectedProbeKeys[type] = selected.map(item => this.probeItemKey(item));
-    return selected;
-  }
-
-  // 同步探针小鸡（type: 'chick' VPS机器 / 'web' 网站）。
-  // 离线的条目不再被移除，而是留在场上进入"倒地不可选中"状态。
-  syncProbeChicks(type, list, toStats) {
-    const source = Array.isArray(list) ? list : [];
-    const otherEntities = [...this.npcs].filter(entity => entity.type !== type).length;
-    const available = Math.max(0, this.maxNpcEntities - otherEntities);
-    const visible = this.selectProbeItems(
-      type,
-      source.filter(item => item && typeof item === 'object'),
-      available
-    );
-    for (const [id, n] of [...this.npcs]) {
-      // 只有彻底从探针列表里消失（配置删除了这条）才真正离场
-      if (n.type === type && !visible.some(s => String(s.key) === n.probeKey)) {
-        this.npcs.delete(id);
-        console.log(`[probe] 下线离场: ${n.name}`);
-      }
-    }
-    for (const s of visible) {
-      const probeKey = String(s.key).slice(0, 256);
-      let n = [...this.npcs.values()].find(c => c.type === type && c.probeKey === probeKey);
-      const stats = toStats(s);
-      const online = s.online !== false; // 缺省视为在线（向后兼容）
-      if (!n) {
-        const t = NPC_TYPE[type];
-        const id = 9500 + ++this.chickSeq;
-        n = {
-          id, npc: true, type, probeKey,
-          name: `探针鸡·${safeText(s.name || probeKey)}`,
-          color: Math.floor(Math.random() * N_COLORS), // 随机毛色型号
-          radius: t.radius, maxHp: t.maxHp,
-          x: 0, z: 0, y: 0, vy: 0, kx: 0, kz: 0,
-          yaw: Math.random() * 6.28, hp: t.maxHp, score: 0,
-          state: 'idle', timer: Math.random() * 2, target: { x: 0, z: 0 },
-          fleeFrom: { x: 0, z: 0 },
-          lastPeck: -9, peckAnim: 0, deadUntil: 0,
-          inp: { mx: 0, mz: 0, run: false, jump: false, yaw: 0, radius: t.radius }
-        };
-        // 探针鸡 / 网站鸡都用稳定 key 派生随机毛色（同一目标花色固定，不随负载变）
-        n.color = chickLookIndex(probeKey, stats);
-        // 离线的机器一开始就躺倒：给它一个不会过期的 deadUntil
-        if (!online) n.deadUntil = Infinity;
-        this.spawnAt(n, (Math.random() * 2 - 1) * (WORLD_HALF - 6), (Math.random() * 2 - 1) * (WORLD_HALF - 6));
-        this.npcs.set(id, n);
-        console.log(`[probe] ${online ? '小鸡入栏' : '小鸡离线躺倒'}: ${n.name}`);
-      }
-      // 在线状态变化：从在线→离线时立刻躺倒；恢复在线时立刻站起来
-      if (online && n.deadUntil === Infinity) {
-        n.deadUntil = 0;
-        n.hp = n.maxHp;
-        n.state = 'idle';
-        n.timer = 1;
-        console.log(`[probe] 恢复在线: ${n.name}`);
-      } else if (!online && n.deadUntil !== Infinity) {
-        n.deadUntil = Infinity;
-        n.hp = 0;
-        console.log(`[probe] 转为离线: ${n.name}`);
-      }
-      // 名字跟随探针数据刷新：面板改名、适配器修复、或首轮 /api/nodes
-      // 元数据偶发失败（cfvpsmon 静默回退 agent 上报名）——都不能让鸡名
-      // 永远停在第一次创建时的值。roster 下发后前端检测 info.name 变化自动重绘。
-      const wantName = `探针鸡·${safeText(s.name || probeKey)}`;
-      if (n.name !== wantName) n.name = wantName;
-      // 体型跟随负载变化（毛色已随机固定，不再随 CPU 变动）
-      if (type === 'chick' && online) {
-        const scale = chickScale(stats);
-        const look = chickLookIndex(probeKey, stats);
-        if (n.color !== look) n.color = look; // 仅纠正历史/兜底值，正常情况下恒定
-        if (n.scale !== scale) n.scale = scale;
-      }
-      n.stats = stats;
-    }
-    this.broadcastRoster();
-  }
+  // ---- NPC 辅助 ----------------------------------------------------------
 
   // 在指定坐标附近生成（避开障碍）
   spawnAt(n, x, z) {
@@ -597,18 +332,15 @@ export class Game {
     n.y = groundHeight(n.x, n.z);
   }
 
-  // 追击判定：鹅只盯玩家；探针小鸡见谁啄谁（玩家、鹅、同伴）
+  // 大鹅只追击玩家；玩家之间仍由服务端统一结算伤害与分数。
   findPrey(n, now, radius) {
-    let best = null, bd = 1e9;
-    const consider = (e) => {
-      if (!e || e.id === n.id || e.deadUntil > now) return;
-      if (e.deadUntil === Infinity) return; // 离线躺倒的鸡不可选中
-      const d = Math.hypot(e.x - n.x, e.z - n.z);
-      if (d < bd) { bd = d; best = e; }
-    };
-    for (const p of this.players.values()) consider(p);
-    if (n.type === 'chick') for (const q of this.npcs.values()) consider(q);
-    return bd <= radius ? best : null;
+    let best = null, distance = Infinity;
+    for (const player of this.players.values()) {
+      if (!player || player.deadUntil > now) continue;
+      const d = Math.hypot(player.x - n.x, player.z - n.z);
+      if (d < distance) { distance = d; best = player; }
+    }
+    return distance <= radius ? best : null;
   }
 
   npcPeck(n, now, victim) {
@@ -625,13 +357,9 @@ export class Game {
     if (victim.hp <= 0) {
       victim.hp = 0;
       victim.deadUntil = now + CONF.koTime;
-      // 大鹅军团共享战绩；探针小鸡各记各的
-      if (n.type === 'goose') {
-        for (const g of this.npcs.values()) {
-          if (g.type === 'goose') g.score++;
-        }
-      } else {
-        n.score++;
+      // 大鹅军团共享战绩
+      for (const goose of this.npcs.values()) {
+        if (goose.type === 'goose') goose.score++;
       }
       this.evQueue.push({ e: 'ko', f: n.id, t: victim.id });
     } else {
@@ -677,7 +405,7 @@ export class Game {
     }
   }
 
-  // 自定义资料：改名。校验通过后更新展示名并全服广播（换图标功能已移除）。
+  // 自定义资料：改名。校验通过后更新展示名并全服广播。
   tryProfile(p, m) {
     const now = Date.now();
     if (now - (p._lastProfile || 0) < 1000) return; // 1 秒冷却，防刷
@@ -685,8 +413,7 @@ export class Game {
     if (m.name === undefined) return;
     const v = validCustomName(m.name);
     if (!v) return;
-    p.customName = v;
-    p.name = v; // 旧版组合过图标前缀的名字，改名时自然回归纯名字
+    p.name = v;
     this.broadcastRoster();
   }
 
@@ -751,41 +478,27 @@ export class Game {
     }
   }
 
-  // 玩家攻击命中动物：造成伤害；大鹅吓跑；探针鸡 2/3 还击追咬、1/3 吓得疾跑逃命
-  // （自卫不受 CPU 门控限制）
+  // 玩家攻击命中大鹅：造成伤害并击退；击杀计入玩家分数。
   damageNpcs(attacker, range, dmg, knock) {
     const now = this.time;
-    for (const n of this.npcs.values()) {
-      if (n.deadUntil === Infinity) continue; // 离线躺倒的鸡不可被啄
-      if (n.deadUntil > now) continue;
-      const dx = n.x - attacker.x, dz = n.z - attacker.z;
+    for (const goose of this.npcs.values()) {
+      if (goose.deadUntil > now) continue;
+      const dx = goose.x - attacker.x, dz = goose.z - attacker.z;
       const d = Math.hypot(dx, dz) || 1;
-      if (d > range + n.radius) continue;
-      n.hp -= dmg;
-      n.kx += (dx / d) * knock * 0.6; // 动物体重大，击退稍弱
-      n.kz += (dz / d) * knock * 0.6;
-      if (n.hp <= 0) {
-        n.hp = 0;
-        n.deadUntil = now + CONF.koTime;
+      if (d > range + goose.radius) continue;
+      goose.hp -= dmg;
+      goose.kx += (dx / d) * knock * 0.6;
+      goose.kz += (dz / d) * knock * 0.6;
+      if (goose.hp <= 0) {
+        goose.hp = 0;
+        goose.deadUntil = now + CONF.koTime;
         attacker.score++;
-        this.evQueue.push({ e: 'ko', f: attacker.id, t: n.id });
-      } else if (n.type === 'chick' || n.type === 'web') {
-        // 被啄的探针鸡：2/3 进入还击状态追咬攻击者；1/3 吓得疾跑逃命（更快但更短）
-        if (n.type === 'chick' && Math.random() < 1 / 3) {
-          n.state = 'flee';
-          n.fleeFrom = { x: attacker.x, z: attacker.z };
-          n.timer = NPC_TYPE.chick.sprintTime;
-          n.sprintUntil = now + NPC_TYPE.chick.sprintTime;
-        } else {
-          n.state = 'chase';
-          n.retaliate = true;
-          n.timer = 3;
-        }
+        this.evQueue.push({ e: 'ko', f: attacker.id, t: goose.id });
       } else {
-        n.state = 'flee';
-        n.timer = 2.2;
+        goose.state = 'flee';
+        goose.timer = 2.2;
+        this.evQueue.push({ e: 'hit', f: attacker.id, t: goose.id, hp: goose.hp });
       }
-      this.evQueue.push({ e: 'hit', f: attacker.id, t: n.id, hp: n.hp });
     }
   }
 
@@ -827,8 +540,7 @@ export class Game {
 
     for (const n of this.npcs.values()) {
       this.updateNpc(n, dt, now);
-      // 离线躺倒的探针鸡不参与碰撞分离，玩家可以直接走过去（不挡路、不卡位）
-      if (n.deadUntil !== Infinity) alive.push(n);
+      alive.push(n);
     }
 
     // 实体间软分离：以速度冲量代替硬推位置——重叠时可以互相挤过去，
@@ -854,8 +566,6 @@ export class Game {
 
   buildStateBits(p, now) {
     let st = 0;
-    // 离线探针鸡永远呈倒地姿态（deadUntil 为 Infinity）
-    if (p.deadUntil === Infinity) return ST_DEAD;
     if (p.deadUntil > now) return ST_DEAD;
     if (p.peckAnim > 0) st |= ST_PECK;
     if (p.wingAnim > 0) st |= ST_FLAP;
@@ -906,22 +616,21 @@ export class Game {
     const list = [];
     for (const p of this.players.values()) {
       list.push({
-        id: p.id, name: p.name, color: p.colorIdx, scale: p.scale || 1,
+        id: p.id, name: p.name, color: p.colorIdx, scale: p.scale || 1, source: 'game',
         flag: this.exposeVisitorGeo ? p.geo.code : null,
         asn: this.exposeVisitorGeo ? p.geo.asn : null,
         asName: this.exposeVisitorGeo ? p.geo.asName : null
       });
     }
     for (const n of this.npcs.values()) {
-      const offline = n.deadUntil === Infinity;
       list.push({
         id: n.id, name: n.name, color: n.color, scale: n.scale || 1, flag: null, asn: null,
-        npc: true, type: n.type, maxHp: n.maxHp, stats: n.stats || null, offline
+        source: 'game', npc: true, type: n.type, maxHp: n.maxHp, offline: false
       });
     }
     const left = [];
     for (const rec of this.leftPlayers.values()) left.push({ id: rec.id, name: rec.name, score: rec.score });
-    const msg = JSON.stringify({ t: 'r', list, probe: this.probeHealth, left });
+    const msg = JSON.stringify({ t: 'r', list, left });
     for (const p of this.players.values()) {
       this.sendSocket(p.ws, msg);
     }

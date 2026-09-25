@@ -1,28 +1,8 @@
 {
   "port": 3777,
   "allowedOrigins": [
-    "https://monitor.example.com"
+    "https://komari.example.com"
   ],
   "geese": 2,
-  "maxPlayers": 60,
-  "maxProbeChicks": 200,
-  "maxNpcEntities": 500,
-  "maxHandshakesPerMinute": 60,
-  "exposeVisitorGeo": false,
-  "geo": {
-    "externalLookup": false
-  },
-  "probe": {
-    "interval": 15000,
-    "sources": [
-      {
-        "name": "我的 Komari",
-        "url": "https://monitor.example.com",
-        "kind": "komari",
-        "tokenEnv": "KOMARI_API_KEY",
-        "timeout": 12000
-      }
-    ],
-    "sites": []
-  }
+  "maxPlayers": 60
 }

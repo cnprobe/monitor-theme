@@ -27,14 +27,14 @@ cache_scope: chicken-vps-bridge
 For example, pushing this tag:
 
 ```bash
-git tag -a chicken-vps-bridge-v0.1.2 -m "Release Chicken VPS Bridge 0.1.2"
-git push origin chicken-vps-bridge-v0.1.2
+git tag -a chicken-vps-bridge-v0.2.0 -m "Release Chicken VPS Bridge 0.2.0"
+git push origin chicken-vps-bridge-v0.2.0
 ```
 
 publishes these tags for this image only:
 
 ```text
-ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.1.2
+ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.0
 ghcr.io/cnprobe/chicken-vps-bridge:latest
 ```
 

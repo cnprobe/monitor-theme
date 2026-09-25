@@ -1,5 +1,5 @@
-# 公开 Komari 不需要 Token；私有 Komari 可选填 KOMARI_API_KEY 或 KOMARI_SHARE_URL。
-# 可以复制 .env.example 为 .env，用来设置 UID/GID、端口和私有认证。
+# 精简 Bridge 只负责多人游戏，不需要 Komari Token 或监控源配置。
+# .env 仅用于 UID/GID、端口和可信代理开关。
 # bridge/config.json 仍通过只读 bind mount 单独挂载。
 services:
   chicken-bridge:
@@ -12,12 +12,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "${BRIDGE_PORT:-3777}"
       CONFIG_PATH: /app/bridge/config.json
-      # Komari-only 不需要以下 Token；保留映射是为了兼容其他适配器。
-      SERVER_STATUS_TOKEN: "${SERVER_STATUS_TOKEN:-}"
-      NEZHA_TOKEN: "${NEZHA_TOKEN:-}"
-      KOMARI_API_KEY: "${KOMARI_API_KEY:-}"
-      KOMARI_SHARE_URL: "${KOMARI_SHARE_URL:-}"
-      TRUST_PROXY: "${TRUST_PROXY:-}"
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
     volumes:
       - type: bind
         source: ./bridge/config.json
