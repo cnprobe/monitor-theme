@@ -71,6 +71,38 @@ test('Bridge roster contains only authoritative players and optional geese', () 
   }
 });
 
+test('Bridge can adjust goose count while preserving inactive goose scores', () => {
+  const wss = { clients: new Set() };
+  const game = new Game(wss, testConfig());
+  try {
+    assert.equal(game.npcs.size, 2);
+    game.npcs.get(9002).score = 4;
+
+    assert.equal(game.setGeeseCount(4), true);
+    assert.deepEqual([...game.npcs.values()].map(npc => npc.name), [
+      'NPC-大白鹅-1', 'NPC-大白鹅-2', 'NPC-大白鹅-3', 'NPC-大白鹅-4',
+    ]);
+
+    assert.equal(game.setGeeseCount(1), true);
+    assert.equal(game.npcs.size, 1);
+    assert.equal(game.setGeeseCount(3), true);
+    assert.equal(game.npcs.get(9002).score, 4);
+    assert.equal(game.setGeeseCount(3), false);
+  } finally {
+    game.close();
+  }
+});
+
+test('player IDs skip the reserved goose range', () => {
+  const game = new Game({ clients: new Set() }, testConfig());
+  try {
+    game.nextId = 9001;
+    assert.equal(game.allocatePlayerId(), 9101);
+  } finally {
+    game.close();
+  }
+});
+
 test('Bridge server source contains no Komari monitor module', async () => {
   const entries = await readdir(serverDir);
   assert.equal(entries.includes('probe'), false);
@@ -82,4 +114,9 @@ test('Bridge server source contains no Komari monitor module', async () => {
     assert.doesNotMatch(source, /KOMARI_API_KEY|KOMARI_SHARE_URL|shareUrlEnv|tokenEnv/i);
     assert.doesNotMatch(source, /\bfetch\s*\(/);
   }
+
+  const themeSettings = await readFile(new URL('../server/theme-settings.js', import.meta.url), 'utf8');
+  assert.match(themeSettings, /\/api\/public/);
+  assert.match(themeSettings, /credentials:\s*'omit'/);
+  assert.doesNotMatch(themeSettings, /common:getNodes|public:getNodesInformation|\/api\/rpc2/i);
 });

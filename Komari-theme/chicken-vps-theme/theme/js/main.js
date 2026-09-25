@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { CONF, WORLD_HALF, ST_DEAD, ST_PECK, ST_AIR, ST_RUN, ST_WALK, ST_FLAP, stepBody, groundHeight, buildObstacles, resolveCircle } from '/shared/physics.js';
-import { Net } from './net.js';
+import { Net, selectPlayerName } from './net.js';
 import { KomariBrowserClient } from './komari-client.js';
 import { buildScene, buildWorld } from './world.js';
 import { Chicken } from './chicken.js';
@@ -11,6 +11,7 @@ import { Feathers } from './feathers.js';
 import { Sfx } from './sfx.js';
 import { HUD } from './hud.js';
 import { createTouchControls, buildTouchUi, isTouchDevice, hasPointerEvents } from './touch.js';
+import { mountFooter } from './footer.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,6 +35,7 @@ const sfx = new Sfx();
 const feathers = new Feathers(scene);
 
 let myId = null, worldBuilt = false;
+let stopFooter = null;
 const roster = new Map();          // id -> {name,color,flag,...}
 const chickens = new Map();        // id -> Chicken
 const localProbeIds = new Set();
@@ -56,6 +58,8 @@ const camTarget = new THREE.Vector3(0, 1, 0);
 // 主循环复用的临时向量（每帧 new 两个 Vector3 是纯 GC 垃圾）
 const _camGoal = new THREE.Vector3();
 const _camOff = new THREE.Vector3();
+const _footerWorld = new THREE.Vector3();
+const _footerUp = new THREE.Vector3();
 
 // 输入
 const keys = {};
@@ -240,6 +244,10 @@ function updateLocalProbeChicks(dt) {
 
 function applyThemeSettings(data) {
   const settings = data.theme_settings || {};
+  stopFooter?.();
+  stopFooter = mountFooter({
+    text: settings.footer_text,
+  });
   const siteName = String(data.sitename || 'Komari 养鸡场').trim();
   $('site-name').textContent = siteName;
   document.title = `${siteName} · 养鸡VPS`;
@@ -257,8 +265,22 @@ function applyThemeSettings(data) {
     seed: `${location.host}:${siteName}`,
   });
   void komari.start();
-  if (!net.name && settings.player_name) net.name = String(settings.player_name).slice(0, 12);
+  if (!net.name) net.sendProfile(selectPlayerName(settings.player_name || '小鸡'));
+  if (myId === 'local') syncLocalIdentity();
   if (!worldBuilt) hud.setMe(net.name || settings.player_name || '小鸡');
+}
+
+function syncLocalIdentity() {
+  if (myId !== 'local') return;
+  const name = net.name || '本地小鸡';
+  const info = roster.get('local');
+  if (info) info.name = name;
+  const chicken = chickens.get('local');
+  if (chicken) {
+    chicken.info.name = name;
+    chicken.drawPlate?.();
+  }
+  hud.setMe(name);
 }
 
 function ensureLocalWorld() {
@@ -269,11 +291,18 @@ function ensureLocalWorld() {
     worldBuilt = true;
   }
 
-  if (myId === null) {
+  if (myId !== 'local') {
+    if (myId !== null) {
+      chickens.get(myId)?.dispose(scene);
+      chickens.delete(myId);
+      roster.delete(myId);
+    }
     myId = 'local';
     hud.myId = myId;
+  }
+  if (!chickens.has('local')) {
     const info = {
-      id: myId,
+      id: 'local',
       name: net.name || '本地小鸡',
       color: 0,
       npc: false,
@@ -282,16 +311,17 @@ function ensureLocalWorld() {
     const chicken = new Chicken(info.color, info, true);
     chicken.ready = true;
     chicken.group.position.set(body.x, body.y, body.z);
-    chickens.set(myId, chicken);
-    roster.set(myId, info);
+    chickens.set('local', chicken);
+    roster.set('local', info);
     scene.add(chicken.group);
   }
   hud.setMultiplayerActive(false);
   hud.onProfile = (patch) => {
-    if (net.sendProfile(patch.name)) hud.setMe(net.name);
+    net.sendProfile(patch.name);
+    syncLocalIdentity();
   };
   hud.setBridgeState('missing', '单机模式');
-  hud.setMe(net.name || '本地小鸡');
+  syncLocalIdentity();
   hud.setSelfState(CONF.maxHp, 0, 0);
 }
 
@@ -316,8 +346,8 @@ net.on('bridge', (state, detail) => {
   if (state === 'error' || state === 'reconnecting' || state === 'missing') {
     hud.setMultiplayerActive(false);
   }
-  if ((state === 'error' || state === 'reconnecting') && !worldBuilt) {
-    ensureLocalWorld();
+  if (state === 'error' || state === 'reconnecting' || state === 'missing') {
+    if (myId !== 'local') ensureLocalWorld();
     hud.setBridgeState(state, detail);
   }
 });
@@ -334,6 +364,10 @@ net.on('welcome', (m) => {
     chickens.get('local')?.dispose(scene);
     chickens.delete('local');
     roster.delete('local');
+  } else if (myId !== null && myId !== m.id) {
+    chickens.get(myId)?.dispose(scene);
+    chickens.delete(myId);
+    roster.delete(myId);
   }
   myId = m.id;
   hud.myId = m.id;
@@ -390,12 +424,13 @@ net.on('snapshot', (m) => {
 });
 
 net.on('drop', () => {
-  hud.setMultiplayerActive(false);
-  hud.banner('🔗 多人连接断开，正在重连…', 5000);
+  ensureLocalWorld();
+  hud.banner('🔗 多人连接断开，已切回单机身份，正在重连…', 5000);
 });
 
 // 断线重连成功：服务端认出了令牌，战绩/毛色已恢复
-net.on('resume', () => {
+net.on('resume', (message) => {
+  net.acceptServerName?.(message?.name);
   hud.banner('🐔 欢迎回来，战绩已恢复！');
 });
 
@@ -522,6 +557,51 @@ const initAudio = () => sfx.init();
 addEventListener('pointerdown', initAudio, { once: true });
 addEventListener('keydown', initAudio, { once: true });
 
+function updateFooterPosition() {
+  const footer = $('me-footer');
+  if (!footer) return;
+  const hideFooter = () => {
+    footer.hidden = true;
+    footer.style.opacity = '0';
+  };
+  const me = chickens.get(myId);
+  const hasText = footer.textContent.trim().length > 0;
+  const localMode = myId === 'local';
+  if (!hasText || !worldBuilt || !me?.ready || (!localMode && !net.connected)) {
+    hideFooter();
+    return;
+  }
+
+  // lookAt() 只更新四元数；先刷新相机矩阵，避免首帧/移动时使用旧的投影矩阵。
+  camera.updateMatrixWorld();
+  me.sprite.getWorldPosition(_footerWorld);
+  _footerUp.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+  const plateScale = Math.abs(me.sprite.scale.y * me.group.scale.y);
+  const lift = Math.max(0.6, Math.min(1.4, plateScale * 1.2 + 0.35));
+  _footerWorld.addScaledVector(_footerUp, lift).project(camera);
+  if (_footerWorld.z < -1 || _footerWorld.z > 1 ||
+      _footerWorld.x < -0.05 || _footerWorld.x > 1.05 ||
+      _footerWorld.y < -0.05 || _footerWorld.y > 1.05) {
+    hideFooter();
+    return;
+  }
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  const x = rect.left + (_footerWorld.x * 0.5 + 0.5) * rect.width;
+  const y = rect.top + (-_footerWorld.y * 0.5 + 0.5) * rect.height;
+  const halfWidth = (footer.offsetWidth || 0) / 2;
+  const halfHeight = footer.offsetHeight || 0;
+  if (x - halfWidth < rect.left + 4 || x + halfWidth > rect.right - 4 ||
+      y - halfHeight - 10 < rect.top + 4 || y > rect.bottom - 4) {
+    hideFooter();
+    return;
+  }
+  footer.style.left = `${x}px`;
+  footer.style.top = `${y}px`;
+  footer.hidden = false;
+  footer.style.opacity = '1';
+}
+
 // ---------- 主循环 ----------
 let lastT = performance.now();
 let sendAcc = 0;
@@ -631,6 +711,7 @@ function renderFrame(now) {
     camera.lookAt(camTarget);
   }
 
+  updateFooterPosition();
   feathers.update(dt);
   renderer.render(scene, camera);
   // 首帧渲染完成，撤掉加载占位

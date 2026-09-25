@@ -8,7 +8,7 @@
     "zh-CN": "单 ZIP 读取当前 Komari 节点，并可选连接极简多人 Bridge 进行互啄。",
     "en": "A single ZIP reads current Komari nodes and optionally connects to a minimal multiplayer Bridge."
   },
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": "Komari Community",
   "url": "https://github.com/komari-monitor/komari-document",
   "preview": "preview.svg",
@@ -30,6 +30,19 @@
         "help": {
           "zh-CN": "可选，例如 wss://chicken.example.com/ws。留空时 ZIP 会直接读取当前 Komari；填写后额外启用多人互啄。只能填写无查询参数的公开地址，切勿填写任何 Token。",
           "en": "Optional, for example wss://chicken.example.com/ws. Leave empty for direct same-origin Komari data; set it to enable multiplayer. Use a public URL without query parameters; never put a token here."
+        }
+      },
+      {
+        "key": "geese",
+        "name": {
+          "zh-CN": "多人模式大鹅数量",
+          "en": "Multiplayer goose count"
+        },
+        "type": "number",
+        "default": 2,
+        "help": {
+          "zh-CN": "设置多人 Bridge 中的大鹅数量，取 0～100 的整数。保存后 Bridge 会在约 15 秒内自动更新；bridge/config.json 中的 geese 作为初始备用值。",
+          "en": "Set the number of geese in the multiplayer Bridge to an integer from 0 to 100. The Bridge updates automatically within about 15 seconds; geese in bridge/config.json is the startup fallback."
         }
       },
       {
@@ -81,8 +94,28 @@
         "type": "string",
         "default": "小鸡",
         "help": {
-          "zh-CN": "最多 12 个字符；访客仍可在页面中修改。",
-          "en": "Up to 12 characters. Visitors can still change it on the page."
+          "zh-CN": "可填写一个或多个名字，用逗号分隔；每个名字最多 12 个字符。首次访问会随机分配一个，单机和多人模式都会同步到小鸡名牌，访客也可以在名字面板中修改。",
+          "en": "Enter one or more names separated by commas; each name can be up to 12 characters. A name is randomly assigned on the first visit and synced to the chicken nameplate in both modes; visitors can change it from the name panel."
+        }
+      },
+      {
+        "name": {
+          "zh-CN": "页脚设置",
+          "en": "Footer settings"
+        },
+        "type": "title"
+      },
+      {
+        "key": "footer_text",
+        "name": {
+          "zh-CN": "页脚自定义文字",
+          "en": "Footer custom text"
+        },
+        "type": "string",
+        "default": "",
+        "help": {
+          "zh-CN": "显示在玩家真实控制小鸡头顶名牌上方的醒目文字，最多 200 个字符；留空则不显示，按纯文本安全渲染。",
+          "en": "Show prominent text above the nameplate of the chicken controlled by the player, up to 200 characters. Leave empty to hide it; it is rendered as safe plain text."
         }
       },
       {

@@ -4,6 +4,10 @@
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
 
+export function formatBoardName(name, player) {
+  return `${name}${player ? '（玩家）' : ''}`;
+}
+
 export class HUD {
   constructor() {
     this.$ = (id) => document.getElementById(id);
@@ -14,7 +18,9 @@ export class HUD {
     this.boardRows = this.$('board-rows');
     this.feed = this.$('feed');
     this.hpfill = this.$('hpfill');
-    this.score = this.$('score');
+    this.scoreText = this.$('score-text');
+    this.scoreRow = this.$('score');
+    this.topbar = this.$('topbar');
     this.bridgeState = this.$('bridge-state');
     this.bridgeDetail = '尚未连接';
     this.bridgeState?.addEventListener('click', () => {
@@ -51,10 +57,18 @@ export class HUD {
   setMultiplayerActive(active) {
     this.multiplayer = !!active;
     document.body.classList.toggle('singleplayer', !this.multiplayer);
+    this.placeBridgeState();
     if (!this.multiplayer) {
       this.closeEditor();
-      this.score.textContent = '单机浏览模式';
+      this.scoreText.textContent = '单机浏览模式';
       this.hpfill.style.width = '0%';
+    }
+  }
+
+  placeBridgeState() {
+    const parent = this.multiplayer ? this.scoreRow : this.topbar;
+    if (parent && this.bridgeState && this.bridgeState.parentElement !== parent) {
+      parent.append(this.bridgeState);
     }
   }
 
@@ -96,7 +110,7 @@ export class HUD {
     this.closeEditor();
   }
 
-  // ZIP 内浏览器直读 Komari 的健康状态；Bridge 多人连接状态由顶部按钮独立显示。
+  // ZIP 内浏览器直读 Komari 的健康状态；Bridge 多人连接状态在多人时由左下角按钮显示。
   setProbeHealth(health) {
     const ok = health?.ok === true;
     this.online.parentElement?.classList.toggle('stale', !ok);
@@ -120,7 +134,7 @@ export class HUD {
     if (!this.multiplayer) return;
     this.hpfill.style.width = Math.max(0, hp) + '%';
     this.hpfill.classList.toggle('low', hp <= 30);
-    this.score.textContent = koLeft > 0
+    this.scoreText.textContent = koLeft > 0
       ? `😵 被啄晕了，${Math.ceil(koLeft)} 秒后满血复活…`
       : `🏆 啄倒 ${score} 只鸡`;
     // #ko-banner 是「死亡状态」与「瞬时提示」共用的元素，而本函数 20Hz 都会进来：
@@ -155,24 +169,39 @@ export class HUD {
     )).length);
 
     // 只读节点不可计分；玩家与每只大鹅分别占一个榜位。
-    this.rows = snapshotPs
+    const rows = snapshotPs
       .filter(entry => !roster.get(entry[0])?.readonly)
       .map(entry => {
         const info = roster.get(entry[0]);
-        const name = info?.name || `#${entry[0]}`;
         return {
           id: entry[0],
           score: entry[7],
-          name: info?.npc ? name : name + '（玩家）',
+          name: info?.name || `#${entry[0]}`,
+          player: !info?.npc,
         };
       });
     // 离场玩家的啄倒记录补进榜（服务端 roster.left）；还在场上的以实时数据为准
-    const liveIds = new Set(this.rows.map(r => r.id));
+    const liveIds = new Set(rows.map(r => r.id));
     for (const rec of this.leftBoard) {
       if (rec && !liveIds.has(rec.id)) {
-        this.rows.push({ id: rec.id, score: rec.score, name: rec.name + '（玩家）', left: true });
+        rows.push({
+          id: rec.id,
+          score: rec.score,
+          name: rec.name || `#${rec.id}`,
+          player: true,
+          left: true,
+        });
       }
     }
+
+    // 名字池可能随机到重复值；排行榜用玩家 ID 区分，头顶名牌仍保留原名。
+    const nameCounts = new Map();
+    for (const row of rows) nameCounts.set(row.name, (nameCounts.get(row.name) || 0) + 1);
+    this.rows = rows.map(row => ({
+      ...row,
+      name: formatBoardName(row.name, row.player),
+      duplicate: nameCounts.get(row.name) > 1,
+    }));
     this.rows.sort((a, b) => b.score - a.score);
     this.renderBoard();
   }
@@ -183,7 +212,9 @@ export class HUD {
   renderBoard(force = false) {
     const now = performance.now();
     const top = this.rows.slice(0, 20); // 榜单展示前 20（2026-09-21 由 10 扩到 20）
-    const sig = this.collapsed + '|' + top.map(r => `${r.id}:${r.score}:${r.name}`).join(',');
+    const sig = this.collapsed + '|' + top.map(r =>
+      `${r.id}:${r.score}:${r.name}:${r.duplicate ? 1 : 0}:${r.left ? 1 : 0}`
+    ).join(',');
     if (!force) {
       if (sig === this._lastBoardSig) return;
       if (now - this._lastBoardPaint < 500) return;
@@ -195,9 +226,10 @@ export class HUD {
       : '🐔 啄倒榜（玩家与大鹅 · 点击收起）';
     this.board.classList.toggle('collapsed', this.collapsed);
     if (this.collapsed) return;
-    this.boardRows.innerHTML = top.map(r =>
-      `<div class="row${r.id === this.myId ? ' me' : ''}${r.left ? ' off' : ''}"><span>${esc(r.name)}</span><b>${esc(r.score)}</b></div>`
-    ).join('');
+    this.boardRows.innerHTML = top.map(r => {
+      const id = r.duplicate ? `<span class="board-id" title="玩家 ID">#${esc(r.id)}</span>` : '';
+      return `<div class="row${r.id === this.myId ? ' me' : ''}${r.left ? ' off' : ''}"><span class="board-name">${esc(r.name)}</span>${id}<b>${esc(r.score)}</b></div>`;
+    }).join('');
   }
 
   killFeed(from, to) {

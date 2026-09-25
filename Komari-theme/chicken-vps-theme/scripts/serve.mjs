@@ -56,10 +56,12 @@ async function serveFixtureApi(pathname, request, response) {
         private_site: false,
         theme_settings: {
           bridge_url: '',
+          geese: 2,
           probe_limit: 6,
           probe_order: '随机',
           probe_refresh_seconds: 5,
           player_name: '预览小鸡',
+          footer_text: '',
           label_mode: '完整',
           sound_enabled: false,
           show_controls: true,

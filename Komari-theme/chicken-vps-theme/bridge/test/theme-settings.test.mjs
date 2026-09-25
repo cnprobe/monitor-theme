@@ -3,17 +3,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../../komari-theme.json', import.meta.url), 'utf8'));
-const items = manifest.configuration?.data || [];
+const items = (manifest.configuration?.data || []).filter(item => item.key);
 const byKey = new Map(items.map(item => [item.key, item]));
 
-test('Komari theme exposes only safe display and optional multiplayer settings', () => {
-  assert.equal(manifest.version, '0.2.1');
+test('Komari theme exposes safe display, multiplayer, and custom footer settings', () => {
+  assert.equal(manifest.version, '0.2.2');
   assert.deepEqual([...byKey.keys()], [
     'bridge_url',
+    'geese',
     'probe_limit',
     'probe_order',
     'probe_refresh_seconds',
     'player_name',
+    'footer_text',
     'label_mode',
     'sound_enabled',
     'show_controls',
@@ -26,6 +28,10 @@ test('Komari theme exposes only safe display and optional multiplayer settings',
   assert.equal(byKey.get('probe_refresh_seconds')?.default, 5);
   assert.equal(byKey.get('bridge_url')?.default, '');
   assert.equal(byKey.get('bridge_url')?.type, 'string');
+  assert.equal(byKey.get('geese')?.type, 'number');
+  assert.equal(byKey.get('geese')?.default, 2);
+  assert.equal(byKey.get('footer_text')?.type, 'string');
+  assert.equal(byKey.get('footer_text')?.default, '');
   assert.equal(byKey.get('label_mode')?.type, 'select');
   assert.equal([...byKey.keys()].some(key => /key|token|secret|share/i.test(key)), false);
 });

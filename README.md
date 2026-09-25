@@ -69,7 +69,7 @@ Komari-theme/chicken-vps-theme/README.md
 chicken-vps-bridge-v<版本号>
 ```
 
-例如 `chicken-vps-bridge-v0.2.1` 只会发布 Chicken VPS Bridge 镜像；其他主题使用各自的 Tag 前缀，不会互相触发。
+例如 `chicken-vps-bridge-v0.2.2` 只会发布 Chicken VPS Bridge 镜像；其他主题使用各自的 Tag 前缀，不会互相触发。
 
 当前主题镜像：
 
@@ -80,7 +80,7 @@ ghcr.io/cnprobe/chicken-vps-bridge:latest
 对应的固定版本镜像示例：
 
 ```text
-ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.1
+ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.2
 ```
 
 主题 ZIP 由主题目录自己的 `npm run package` 生成；Docker 镜像和主题 ZIP 是两个独立产物。

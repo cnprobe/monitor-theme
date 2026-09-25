@@ -12,6 +12,40 @@ const isObject = value => !!value && typeof value === 'object' && !Array.isArray
 const safeText = (value, max) => typeof value === 'string'
   ? value.replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g, '').slice(0, max)
   : '';
+
+export function normalizePlayerName(value) {
+  if (typeof value !== 'string') return '';
+  const clean = value
+    .slice(0, 256)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean && [...clean].length <= 12 ? clean : '';
+}
+
+export function selectPlayerName(value, random = Math.random) {
+  const values = Array.isArray(value) ? value : String(value ?? '').split(/[,，、\n]/);
+  const pool = [];
+  const seen = new Set();
+  for (const item of values) {
+    const clean = String(item ?? '')
+      .replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const name = [...clean].slice(0, 12).join('');
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      pool.push(name);
+    }
+  }
+  if (!pool.length) return '小鸡';
+  const sample = Number(random());
+  const index = Number.isFinite(sample)
+    ? Math.min(pool.length - 1, Math.max(0, Math.floor(sample * pool.length)))
+    : 0;
+  return pool[index];
+}
+
 const safeNumber = (value, min, max, fallback = 0) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
@@ -34,18 +68,32 @@ async function frameText(data) {
   return '';
 }
 
+export function normalizeGooseName(value, id) {
+  const name = safeText(value, 120).trim();
+  const numbered = name.match(/^NPC[·-]大白鹅-(\d+)$/);
+  if (numbered) {
+    const number = Number(numbered[1]);
+    if (Number.isSafeInteger(number) && number > 0) return `NPC-大白鹅-${number}`;
+  }
+  if (name !== 'NPC·大白鹅' && name !== 'NPC-大白鹅') return name;
+  const numericId = Number(id);
+  const suffix = numericId >= 9001 ? numericId - 9000 : numericId;
+  return `NPC-大白鹅-${Number.isSafeInteger(suffix) && suffix > 0 ? suffix : 1}`;
+}
+
 function sanitizeRosterInfo(info) {
   if (!isObject(info)) return null;
   const id = safeId(info.id);
   if (!id) return null;
+  const npc = info.npc === true && info.type === 'goose';
   return {
     id,
-    name: safeText(info.name, 120),
+    name: npc ? normalizeGooseName(info.name, id) : safeText(info.name, 120),
     color: safeNumber(info.color, 0, 32, 0),
     maxHp: safeNumber(info.maxHp, 1, 1000, 100),
     scale: safeNumber(info.scale, 0.5, 2, 1),
     score: safeNumber(info.score, 0, 1e9, 0),
-    npc: info.npc === true && info.type === 'goose',
+    npc,
     type: info.type === 'goose' ? 'goose' : '',
     offline: false,
     flag: safeText(info.flag, 2),
@@ -206,7 +254,9 @@ export class Net {
       this.token = '';
       this.tokenOrigin = '';
     }
-    this.name = readStorage(NAME_KEY);
+    const savedName = readStorage(NAME_KEY);
+    this.name = normalizePlayerName(savedName);
+    if (savedName && !this.name) writeStorage(NAME_KEY, '');
     this.retry = 0;
     this.reconnectTimer = null;
     this.closing = false;
@@ -318,9 +368,17 @@ export class Net {
     };
   }
 
+  acceptServerName(name) {
+    const clean = normalizePlayerName(name);
+    if (!clean) return false;
+    this.name = clean;
+    writeStorage(NAME_KEY, clean);
+    return true;
+  }
+
   sendProfile(name) {
-    const clean = String(name || '').replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g, '').replace(/\s+/g, ' ').trim();
-    if (!clean || [...clean].length > 12) return false;
+    const clean = normalizePlayerName(name);
+    if (!clean) return false;
     this.name = clean;
     writeStorage(NAME_KEY, clean);
     return this.send({ t: 'profile', name: clean });

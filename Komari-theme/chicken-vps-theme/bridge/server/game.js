@@ -1,5 +1,5 @@
 // 权威多人游戏服务器：玩家移动、碰撞、啄击、扇翅、比分与断线恢复均由服务端计算。
-// Bridge 不读取任何 Komari 数据；可选 NPC 仅包括大白鹅。
+// Bridge 不读取 Komari 节点数据；只会从受信 Origin 读取公开主题设置中的 geese。
 
 import { randomBytes } from 'crypto';
 import {
@@ -35,6 +35,8 @@ function validCustomName(s) {
 const NPC_TYPE = {
   goose: { radius: 0.35, walk: 1.3, flee: 3.6, chase: 2.55, chaseRadius: 2.5, color: 2, maxHp: 60, peckDamage: 6, peckKnock: 3.2, peckCd: 1.2 },
 };
+const NPC_ID_START = 9001;
+const NPC_ID_END = 9100;
 
 function extractIp(req, trustCf, trustedProxyCidrs = []) {
   return resolveClientIp(req.socket?.remoteAddress, req.headers, {
@@ -53,6 +55,8 @@ export class Game {
     this.players = new Map();
     this.pendingPlayers = 0;
     this.npcs = new Map();
+    this.npcPool = new Map();
+    this.geeseTarget = 0;
     this.sessions = new Map(); // token -> { player, expireAt }：断线后可恢复身份与战绩
     // 离场玩家的啄倒记录（榜单保留用）：id -> {id, name, score, leftAt}
     // 只记 score>0 的；上限 100 条，满了挤最旧的。玩家回场（resume）即撤下。
@@ -89,9 +93,16 @@ export class Game {
     clearInterval(this.sessionCleanupTimer);
     clearInterval(this.tickTimer);
     this.sessions.clear();
+    this.npcPool.clear();
   }
 
   // ---- 连接生命周期 ------------------------------------------------------
+
+  allocatePlayerId() {
+    let id = this.nextId++;
+    while (id >= NPC_ID_START && id <= NPC_ID_END) id = this.nextId++;
+    return id;
+  }
 
   async onConnection(ws, req) {
     // 并发上限：满了就拒（1013 = Try Again Later），不做 geo 外呼、不进名单，
@@ -119,7 +130,7 @@ export class Game {
       return;
     }
 
-    const id = this.nextId++;
+    const id = this.allocatePlayerId();
     const breed = BREEDS[Math.floor(Math.random() * BREEDS.length)];
     // 名字只显示鸡的品种；地区信息由名牌上的旗标图标表达
     const token = randomBytes(24).toString('base64url');
@@ -228,26 +239,68 @@ export class Game {
 
   // ---- NPC ---------------------------------------------------------------
 
-  spawnNpcs() {
-    // 大鹅数量由 config.json 的 geese 决定，随机位置入栏
-    const count = Math.min(100, Math.max(0, this.cfg.geese ?? 2));
-    for (let i = 0; i < count; i++) {
-      const t = NPC_TYPE.goose;
-      const n = {
-        id: 9000 + i + 1,
-        npc: true, type: 'goose', name: `NPC-大白鹅-${i + 1}`,
-        color: t.color, radius: t.radius, maxHp: t.maxHp,
-        x: 0, z: 0, y: 0, vy: 0, kx: 0, kz: 0,
-        yaw: Math.random() * 6.28, hp: t.maxHp, score: 0,
-        state: 'idle', timer: Math.random() * 2, target: { x: 0, z: 0 },
-        fleeFrom: { x: 0, z: 0 },
-        lastPeck: -9, peckAnim: 0, deadUntil: 0,
-        inp: { mx: 0, mz: 0, run: false, jump: false, yaw: 0, radius: t.radius }
-      };
-      this.spawnAt(n, (Math.random() * 2 - 1) * (WORLD_HALF - 6), (Math.random() * 2 - 1) * (WORLD_HALF - 6));
-      this.npcs.set(n.id, n);
+  normalizeGeeseCount(value, fallback = this.geeseTarget) {
+    const count = Number(value);
+    return Number.isInteger(count) && count >= 0 && count <= 100 ? count : fallback;
+  }
+
+  createGoose(id) {
+    const t = NPC_TYPE.goose;
+    return {
+      id,
+      npc: true, type: 'goose', name: `NPC-大白鹅-${id - NPC_ID_START + 1}`,
+      color: t.color, radius: t.radius, maxHp: t.maxHp,
+      x: 0, z: 0, y: 0, vy: 0, kx: 0, kz: 0,
+      yaw: Math.random() * 6.28, hp: t.maxHp, score: 0,
+      state: 'idle', timer: Math.random() * 2, target: { x: 0, z: 0 },
+      fleeFrom: { x: 0, z: 0 },
+      lastPeck: -9, peckAnim: 0, deadUntil: 0,
+      inp: { mx: 0, mz: 0, run: false, jump: false, yaw: 0, radius: t.radius }
+    };
+  }
+
+  findAvailableGooseId() {
+    let id = NPC_ID_START;
+    while (this.npcs.has(id)) id++;
+    return id;
+  }
+
+  spawnNpcs(count = this.cfg.geese ?? 2) {
+    // config.json 提供启动值；主题设置可在运行时调用 setGeeseCount 调整。
+    const target = this.normalizeGeeseCount(count);
+    while (this.npcs.size > target) {
+      const id = [...this.npcs.keys()].sort((a, b) => b - a)[0];
+      const goose = this.npcs.get(id);
+      this.npcs.delete(id);
+      if (goose) this.npcPool.set(id, goose);
+      for (let i = this.evQueue.length - 1; i >= 0; i--) {
+        if (this.evQueue[i].t === id || this.evQueue[i].f === id) this.evQueue.splice(i, 1);
+      }
     }
+    while (this.npcs.size < target) {
+      const id = this.findAvailableGooseId();
+      const goose = this.npcPool.get(id) || this.createGoose(id);
+      this.npcPool.delete(id);
+      // 重新启用暂存的大鹅时恢复满血，但保留它自己的击杀数。
+      goose.hp = goose.maxHp;
+      goose.deadUntil = 0;
+      goose.state = 'idle';
+      goose.timer = Math.random() * 2;
+      goose.peckAnim = 0;
+      goose.lastPeck = -9;
+      this.spawnAt(goose, (Math.random() * 2 - 1) * (WORLD_HALF - 6), (Math.random() * 2 - 1) * (WORLD_HALF - 6));
+      this.npcs.set(id, goose);
+    }
+    this.geeseTarget = target;
     console.log(`[npc] 已放养 ${this.npcs.size} 只大鹅`);
+  }
+
+  setGeeseCount(value) {
+    const target = this.normalizeGeeseCount(value);
+    if (target === this.geeseTarget && this.npcs.size === target) return false;
+    this.spawnNpcs(target);
+    this.broadcastRoster();
+    return true;
   }
 
   updateNpc(n, dt, now) {

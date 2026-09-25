@@ -1,6 +1,6 @@
 {
   "name": "chicken-vps-komari-theme-template",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "Single-ZIP Komari theme with an optional game-only multiplayer Bridge.",

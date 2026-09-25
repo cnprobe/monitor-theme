@@ -3,6 +3,7 @@
   "allowedOrigins": [
     "https://komari.example.com"
   ],
+  "themeSettingsOrigin": "https://komari.example.com",
   "geese": 2,
   "maxPlayers": 60
 }

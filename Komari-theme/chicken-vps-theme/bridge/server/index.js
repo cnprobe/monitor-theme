@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import { Game } from './game.js';
 import cfg from './config.js';
 import { isOriginAllowed, resolveClientIp } from './security.js';
+import { startThemeSettingsPoller } from './theme-settings.js';
 
 const portValue = process.env.PORT !== undefined && process.env.PORT !== ''
   ? process.env.PORT : (cfg.port ?? 3777);
@@ -76,6 +77,11 @@ const wss = new WebSocketServer({
 });
 
 const game = new Game(wss, cfg);
+// 只从已配置/白名单中的 Komari Origin 读取公开 geese 设置；失败时保留 config.json 数量。
+startThemeSettingsPoller({
+  config: cfg,
+  onGeese: count => game.setGeeseCount(count),
+});
 wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });

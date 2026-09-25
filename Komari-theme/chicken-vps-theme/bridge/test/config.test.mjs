@@ -17,12 +17,14 @@ test('loads the minimal multiplayer Bridge config', () => {
   const cfg = normalizeConfig({
     port: 8081,
     allowedOrigins: ['https://Example.test/'],
+    themeSettingsOrigin: 'https://example.test',
     geese: 3,
     maxPlayers: 20,
     geo: { externalLookup: false },
   }, 'config.json');
   assert.equal(cfg.port, 8081);
   assert.deepEqual(cfg.allowedOrigins, ['https://example.test']);
+  assert.equal(cfg.themeSettingsOrigin, 'https://example.test');
   assert.equal(cfg.geese, 3);
   assert.equal(cfg.maxPlayers, 20);
   assert.equal(cfg.geo.externalLookup, false);
@@ -46,6 +48,20 @@ test('invalid multiplayer config fields fail with the field path', () => {
   assert.throws(
     () => normalizeConfig({ allowedOrigins: 'https://example.test' }, 'config.json'),
     /config\.json\.allowedOrigins/
+  );
+  assert.throws(
+    () => normalizeConfig({
+      allowedOrigins: ['https://example.test'],
+      themeSettingsOrigin: 'https://other.test',
+    }, 'config.json'),
+    /config\.json\.themeSettingsOrigin/,
+  );
+  assert.throws(
+    () => normalizeConfig({
+      allowedOrigins: ['http://public.example'],
+      themeSettingsOrigin: 'http://public.example',
+    }, 'config.json'),
+    /config\.json\.themeSettingsOrigin/,
   );
   assert.throws(() => normalizeConfig({ geese: 100000 }, 'config.json'), /config\.json\.geese/);
   assert.throws(() => normalizeConfig({ maxPlayers: 0 }, 'config.json'), /config\.json\.maxPlayers/);
@@ -72,6 +88,7 @@ test('missing config uses localhost-only multiplayer defaults', () => {
   assert.ok(cfg.allowedOrigins.includes('http://localhost:3777'));
   assert.ok(cfg.allowedOrigins.includes('http://127.0.0.1:4173'));
   assert.ok(cfg.allowedOrigins.every(origin => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):/.test(origin)));
+  assert.equal(cfg.themeSettingsOrigin, '');
   assert.equal(cfg.geese, 2);
   assert.equal(cfg.maxPlayers, 60);
 });

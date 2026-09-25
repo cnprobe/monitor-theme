@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
+  canonicalOrigin,
   defaultAllowedOrigins,
   normalizeAllowedOrigins,
   validateTrustedProxyCidrs,
@@ -66,6 +67,7 @@ function freshDefaults(port = 3777) {
     exposeVisitorGeo: false,
     trustedProxyCidrs: [],
     allowedOrigins: defaultOriginsForPort(port),
+    themeSettingsOrigin: '',
     geese: 2,
     maxPlayers: 60,
     maxHandshakesPerMinute: 60,
@@ -109,6 +111,26 @@ export function normalizeConfig(raw, sourcePath = 'config.json') {
     allowedOrigins = defaultOriginsForPort(port);
   }
 
+  let themeSettingsOrigin = DEFAULTS.themeSettingsOrigin;
+  if (has(raw, 'themeSettingsOrigin')) {
+    if (raw.themeSettingsOrigin === '') {
+      themeSettingsOrigin = '';
+    } else {
+      themeSettingsOrigin = canonicalOrigin(raw.themeSettingsOrigin);
+      if (!themeSettingsOrigin || themeSettingsOrigin === '*') {
+        fail(`${sourcePath}.themeSettingsOrigin`, 'must be an http(s) origin or an empty string');
+      }
+      if (!allowedOrigins.includes(themeSettingsOrigin)) {
+        fail(`${sourcePath}.themeSettingsOrigin`, 'must also be present in allowedOrigins');
+      }
+      const settingsUrl = new URL(themeSettingsOrigin);
+      const loopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(settingsUrl.hostname.toLowerCase());
+      if (settingsUrl.protocol !== 'https:' && !loopback) {
+        fail(`${sourcePath}.themeSettingsOrigin`, 'must use https for a public origin');
+      }
+    }
+  }
+
   if (has(raw, 'geese')) numberField(raw.geese, `${sourcePath}.geese`, { min: 0, max: 100, integer: true });
   if (has(raw, 'maxPlayers')) numberField(raw.maxPlayers, `${sourcePath}.maxPlayers`, { min: 1, max: 200, integer: true });
   if (has(raw, 'maxHandshakesPerMinute')) {
@@ -131,6 +153,7 @@ export function normalizeConfig(raw, sourcePath = 'config.json') {
     exposeVisitorGeo: has(raw, 'exposeVisitorGeo') ? raw.exposeVisitorGeo : DEFAULTS.exposeVisitorGeo,
     trustedProxyCidrs: Array.isArray(raw.trustedProxyCidrs) ? [...raw.trustedProxyCidrs] : [...DEFAULTS.trustedProxyCidrs],
     allowedOrigins,
+    themeSettingsOrigin,
     geese: has(raw, 'geese') ? raw.geese : DEFAULTS.geese,
     maxPlayers: has(raw, 'maxPlayers') ? raw.maxPlayers : DEFAULTS.maxPlayers,
     maxHandshakesPerMinute: has(raw, 'maxHandshakesPerMinute') ? raw.maxHandshakesPerMinute : DEFAULTS.maxHandshakesPerMinute,

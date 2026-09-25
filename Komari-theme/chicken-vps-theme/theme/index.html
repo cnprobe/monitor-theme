@@ -36,19 +36,24 @@
   <div id="feed"></div>
   <div id="probe-warn"></div>
   <div id="ko-banner"></div>
-  <div id="me">
-    <div id="me-line">
-      <span id="me-name">小鸡</span>
-      <button id="me-edit" type="button" title="改名字">✏️</button>
-    </div>
-    <div id="me-name-editor" class="hidden">
-      <div id="me-name-row">
-        <input id="me-name-input" maxlength="12" placeholder="名字（最多 12 字）">
-        <button id="me-name-ok" type="button">确定</button>
+  <div id="me-footer" class="me-footer" hidden>
+    <div id="footer-text" class="me-footer-text"></div>
+  </div>
+  <div id="me-stack">
+    <div id="me">
+      <div id="me-line">
+        <span id="me-name">小鸡</span>
+        <button id="me-edit" type="button" title="改名字">✏️</button>
       </div>
+      <div id="me-name-editor" class="hidden">
+        <div id="me-name-row">
+          <input id="me-name-input" placeholder="名字（最多 12 字）">
+          <button id="me-name-ok" type="button">确定</button>
+        </div>
+      </div>
+      <div id="hpbar"><div id="hpfill"></div></div>
+      <div id="score"><span id="score-text">等待伴生服务同步…</span></div>
     </div>
-    <div id="hpbar"><div id="hpfill"></div></div>
-    <div id="score">等待伴生服务同步…</div>
   </div>
   <div id="hint-desktop" class="hint">Esc 释放鼠标 · WASD 移动 · Shift 疾跑 · 空格 跳 · 左键 啄 · 右键 扇翅 · 滚轮 缩放 · M 静音</div>
   <div id="hint-touch" class="hint">左摇杆移动 · 拖屏幕转视角 · 轻点啄 · 右侧按钮扇翅/跳</div>

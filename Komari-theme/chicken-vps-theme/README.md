@@ -23,13 +23,13 @@
 - 私有 Komari 使用浏览器现有的登录 Cookie 或临时分享 Cookie；最终权限由 Komari 判断。
 - Komari 节点不会发送给 Bridge。
 - ZIP 中的节点是只读展示实体，不参与 Bridge 碰撞、伤害、比分或排行榜。
-- Bridge 只接受 `protocol: 2` 的玩家协议，不访问任何 Komari 上游。
+- Bridge 只接受 `protocol: 2` 的玩家协议，不访问 Komari 节点 RPC；仅从配置的 Origin 读取公开主题设置中的 `geese`。
 
 ## 单 ZIP 部署
 
 只显示 Komari 节点和 3D 小鸡时，不需要 Bridge、Docker、`.env` 或任何凭据。
 
-1. 获取 `ChickenFarm-0.2.1.zip`。
+1. 获取 `ChickenFarm-0.2.2.zip`。
 2. 在 Komari 后台上传 ZIP。
 3. 打开主题页面。
 4. 公共站点直接显示；私有站点先登录，或使用 Komari 生成的临时分享链接打开主题。
@@ -60,10 +60,12 @@ common:getNodesLatestStatus { uuids: [当前选中的节点 UUID] }
 | 设置 | 默认值 | 作用 |
 | --- | --- | --- |
 | `bridge_url` | 空 | 可选多人 WebSocket；留空为单 ZIP 模式 |
+| `geese` | `2` | 多人 Bridge 大鹅数量，范围 `0～100`；保存后约 15 秒自动同步 |
 | `probe_limit` | `10` | 显示节点数；`0` 表示全部，浏览器硬上限为 200 |
 | `probe_order` | `随机` | `随机` 使用稳定种子；`按名称` 排序后取前 N 台 |
 | `probe_refresh_seconds` | `5` | 浏览器读取实时数据的间隔，范围 2～60 秒 |
-| `player_name` | `小鸡` | 连接多人 Bridge 时的默认玩家名 |
+| `player_name` | `小鸡` | 默认玩家名；可用逗号分隔多个名字，首次访问随机分配 |
+| `footer_text` | 空 | 显示在玩家小鸡面板上方的醒目自定义文字 |
 | `label_mode` | `完整` | 完整、精简或关闭名牌 |
 | `sound_enabled` | `true` | 互动音效 |
 | `show_controls` | `true` | 操作提示 |
@@ -71,6 +73,20 @@ common:getNodesLatestStatus { uuids: [当前选中的节点 UUID] }
 同一站点默认使用稳定随机种子，因此不同访客通常看到相同的一批节点。修改节点列表、显示数量、排序方式或站点种子后，名单才会改变。
 
 不要把 API Key、Agent Token、临时分享链接或其他秘密放进主题设置。主题设置会公开给浏览器。
+
+### 玩家面板上方页脚
+
+单机和多人模式下，管理员在 `footer_text` 中填写的内容都会以醒目的无边框纯文本显示在玩家真实控制小鸡的头顶名牌上方。留空时不显示任何页脚内容；主题不会自动查询或显示访客 IP、国家、城市、运营商等信息。
+
+### 默认访客名字池
+
+`player_name` 可以填写一个或多个名字，例如：
+
+```text
+战斗鸡,芦花鸡,铁公鸡
+```
+
+每个名字最多 12 个字符。新访客首次加载时会从名字池中随机分配一个，并保存到浏览器本地；单机和多人模式都会同步到真实控制小鸡的头顶名牌，访客也可以在名字面板中随时修改。啄倒榜如果出现同名玩家，会自动在名字后追加玩家 ID，保证榜单中可区分。
 
 ## 可选多人 Bridge
 
@@ -91,16 +107,19 @@ chmod 600 bridge/config.json
   "allowedOrigins": [
     "https://komari.example.com"
   ],
+  "themeSettingsOrigin": "https://komari.example.com",
   "geese": 2,
   "maxPlayers": 60
 }
 ```
 
 - `allowedOrigins` 填写真实 Komari 页面 Origin，不带路径。
+- `themeSettingsOrigin` 指定从哪个 Origin 读取公开的 `/api/public` 主题设置；它必须同时出现在 `allowedOrigins` 中。若省略，只有白名单中恰好存在一个 HTTPS 公网 Origin 时才会自动选择；多个站点必须显式填写。
+- 主题管理中的 `geese` 会在约 15 秒内同步到 Bridge；`bridge/config.json` 中的 `geese` 是启动时和读取失败时的备用值。
 - `geese: 0` 可关闭大鹅。
 - 每只大鹅按创建顺序命名为 `NPC-大白鹅-1`、`NPC-大白鹅-2` 等，并独立记录自己的击杀战绩。
 - `maxPlayers` 限制同时在线玩家数。
-- 配置中没有 Komari 地址、凭据、节点列表或轮询设置。
+- 配置中没有 Komari 凭据、节点列表或节点状态轮询设置；Bridge 只读取公开主题设置中的 `geese`。
 
 Bridge 还支持可选的 `trustedProxyCidrs`、`trustCloudflareIp`、`exposeVisitorGeo`、`geo` 和 `maxHandshakesPerMinute`；最小部署无需填写。
 
@@ -286,14 +305,14 @@ npm run package
 - 单机只读 HUD 与多人模式切换；
 - Bridge 最小配置和未知字段丢弃；
 - 玩家、大鹅、权威快照与双客户端断线恢复；
-- Origin、HTTPS/WSS、代理信任和同源设置请求；
-- Bridge 源码不包含 Komari 上游客户端。
+- Origin、HTTPS/WSS、代理信任、同源设置请求和 Bridge 公开 `geese` 同步；
+- Bridge 不包含 Komari 节点 RPC 或上游监控客户端。
 
 主题产物：
 
 ```text
-release/ChickenFarm-0.2.1.zip
-SHA-256: 98c3658408d27bf748646a46ed5e01dd92ab3d966488e6bd17907e3ba0097334
+release/ChickenFarm-0.2.2.zip
+SHA-256: 6790d792550340816970879e05b74b2643f677ae0cfbc81d79ab0f32f221ff33
 ```
 
 ZIP 只包含主题静态资源、清单、预览图、来源说明和安全说明，不包含 `bridge/config.json`、`.env`、密钥或 Bridge 源码。
@@ -307,17 +326,17 @@ Bridge 镜像由根仓库工作流构建：
 .github/workflows/build-theme-image.yml
 ```
 
-发布 `0.2.1`：
+发布 `0.2.2`：
 
 ```bash
-git tag -a chicken-vps-bridge-v0.2.1 -m "Release Chicken VPS Bridge 0.2.1"
-git push origin chicken-vps-bridge-v0.2.1
+git tag -a chicken-vps-bridge-v0.2.2 -m "Release Chicken VPS Bridge 0.2.2"
+git push origin chicken-vps-bridge-v0.2.2
 ```
 
 镜像标签：
 
 ```text
-ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.1
+ghcr.io/cnprobe/chicken-vps-bridge:chicken-vps-bridge-v0.2.2
 ghcr.io/cnprobe/chicken-vps-bridge:latest
 ```
 
